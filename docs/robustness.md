@@ -20,6 +20,13 @@ analyzer. This document lists the defences and where they live.
 
 The Rich header search is limited to the first 4 KiB, whatever `e_lfanew`
 claims.
+
+**ELF.** `EI_CLASS` / `EI_DATA` are checked first; every multi-byte read is
+byte-order aware. `e_phnum` is checked against `max_segments`, `e_phentsize`
+must be 32 / 56, and the table must lie inside the file *before* goblin
+parses it. Section headers are optional: a bad `e_shentsize`, an
+oversized count, a table past EOF or a bad `e_shstrndx` is recorded as a
+section problem instead of aborting. `PT_INTERP` is read up to 4096 bytes.
 | `max_exports` | 65 536 | Export entries. |
 | `max_strings` | 200 000 | Strings kept (the rest are only counted). |
 | `max_string_len` | 4096 | Characters copied per string. |

@@ -149,6 +149,26 @@ problems }`. `status` is `signed_unverified` (well-formed table containing a
 PKCS#7 SignedData) or `malformed` (see `problems`). **The signature is never
 verified**: no hash or certificate chain check.
 
+**`elf`** (non-ELF input: `null`). Each part is `null` if its analyzer failed.
+
+`elf.headers`:
+
+| Field | Type | Description |
+|---|---|---|
+| `bits` | integer | `32` or `64`. |
+| `endianness` | string | `little` or `big`. |
+| `os_abi` / `os_abi_raw` | string / integer | `sysv`, `linux`, `freebsd`, ... or `unknown_N`; raw `EI_OSABI`. |
+| `elf_type` | string | `rel`, `exec`, `dyn`, `core` or `unknown_N`. |
+| `kind` | string | `executable`, `pie`, `shared_library`, `relocatable`, `core` or `unknown`. |
+| `machine` / `machine_raw` | string / integer | `x86_64`, `i386`, `aarch64`, `arm`, `mips`, `ppc`, `ppc64`, `riscv`, ... or `unknown_N`. |
+| `entry_point` | object \| null | `{ vaddr, segment }`, `segment` = index of the `PT_LOAD` containing it or `null`; `null` when `e_entry` is 0. |
+| `interpreter` | string \| null | `PT_INTERP` path (raw, sanitize before display). |
+| `number_of_segments` / `number_of_sections` | integer | Program headers; usable section headers (0 if absent or ignored). |
+| `flags` | integer | Raw `e_flags`. |
+
+An ELF whose program headers cannot be parsed produces one `errors` entry
+from analyzer `elf-parse`; other ELF analyzers then leave their facts `null`.
+
 A PE that fails to parse produces one `errors` entry from analyzer
 `pe-parse`; the other PE analyzers then leave their facts `null`.
 

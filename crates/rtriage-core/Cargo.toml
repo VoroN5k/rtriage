@@ -8,7 +8,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
-goblin = { version = "0.10.7", default-features = false, features = ["std", "pe32", "pe64"] }
+goblin = { version = "0.10.7", default-features = false, features = ["std", "pe32", "pe64", "elf32", "elf64", "endian_fd"] }
 md-5 = "0.11.0"
 regex = "1.13.2"
 serde = { version = "1.0.229", features = ["derive"] }

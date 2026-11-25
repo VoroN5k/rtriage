@@ -580,6 +580,54 @@ fraudulently obtained certificates are common; rewarding an unverified
 signature would give attackers a cheap way to whitewash a file. A test pins
 that signing a file leaves its score unchanged.
 
+### ELF headers (`elf-headers` analyzer)
+
+**Program headers are the source of truth** (they are what the loader
+uses): an unusable program header table (wrong `e_phentsize`, past EOF,
+`e_phnum > max_segments`) is a parse error. Section header problems (wrong
+`e_shentsize`, table past EOF, bad `e_shstrndx`, too many sections) are
+recorded and analysis continues without sections; they surface as
+`ELF-SECTIONS-INCONSISTENT` (step 3). Extended numbering (`PN_XNUM`,
+`e_shnum == 0`, `SHN_XINDEX`) is followed through section 0.
+
+#### `ELF-ENTRY-UNUSUAL`
+
+| | |
+|---|---|
+| Severity / confidence | Medium / High (15 points) |
+| Category | `anomaly` |
+| Trigger | `e_type` is `EXEC` or `DYN`, `e_entry != 0`, and `e_entry` is not inside a `PT_LOAD` with `PF_X` (either in a non-executable `PT_LOAD`, or outside all of them). |
+| Evidence | `field e_entry`, `field segment` (index and permissions) when inside a non-executable load |
+
+**Not judged.** Relocatable objects and core files; `e_entry == 0`
+(shared libraries without an entry point).
+**False positives.** Practically none for files that actually run; loaders
+refuse or crash on such files, so this means crafted or corrupted input.
+
+#### `ELF-INTERP-UNUSUAL`
+
+| Interpreter (`PT_INTERP`) | Severity / confidence | Points |
+|---|---|---|
+| Relative path, contains `..`, or under `/tmp/`, `/var/tmp/`, `/dev/shm/`, `/run/user/` | Medium / High | 15 |
+| Any other absolute path that is not a known loader | Medium / Medium | 11 |
+
+| | |
+|---|---|
+| Category | `anomaly` |
+| Evidence | `field PT_INTERP` |
+
+**Known loaders (never flagged):** a file named `ld-linux*`, `ld64.so.*`,
+`ld.so.*`, `ld-musl-*` or `ld-uClibc*` directly in `/lib`, `/lib32`,
+`/lib64`, `/libx32`, `/usr/lib`, `/usr/lib32` or `/usr/lib64`; Android
+`/system/bin/linker[64]`; FreeBSD `/libexec/ld-elf[32].so.1`; OpenBSD
+`/usr/libexec/ld.so`; NetBSD `/usr/libexec/ld.elf_so`; and loaders inside
+the **Nix** (`/nix/store/`) and **Guix** (`/gnu/store/`) stores (any depth,
+loader file name required).
+**Rationale.** The interpreter runs before any program code with full
+control of the process; a loader in a writable location is a hijack point.
+**False positives.** Vendor toolchains and embedded SDKs shipping their own
+loader under `/opt` (Medium/Medium variant).
+
 ### Facts that suppress heuristics
 
 - `facts.pe.headers.managed_dotnet`: set when the CLR (COM descriptor) data

@@ -55,6 +55,57 @@ pub struct Facts {
     pub strings: Option<StringsFacts>,
     /// PE-specific facts; `None` for non-PE input.
     pub pe: Option<PeFacts>,
+    /// ELF-specific facts; `None` for non-ELF input.
+    pub elf: Option<ElfFacts>,
+}
+
+/// ELF facts; each part is filled by its own analyzer.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct ElfFacts {
+    /// ELF header summary.
+    pub headers: Option<ElfHeaderFacts>,
+}
+
+/// Summary of the ELF header.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ElfHeaderFacts {
+    /// 32 or 64.
+    pub bits: u8,
+    /// `little` or `big`.
+    pub endianness: &'static str,
+    /// OS/ABI name (`sysv`, `linux`, `freebsd`, ... or `unknown_N`).
+    pub os_abi: String,
+    /// Raw `EI_OSABI`.
+    pub os_abi_raw: u8,
+    /// `e_type` name: `rel`, `exec`, `dyn`, `core` or `unknown_N`.
+    pub elf_type: String,
+    /// What the file is: `executable`, `pie`, `shared_library`,
+    /// `relocatable`, `core` or `unknown`. PIE vs. shared library is decided
+    /// by the presence of an interpreter (refined with `DF_1_PIE` later).
+    pub kind: &'static str,
+    /// Machine name (`x86_64`, `aarch64`, `mips`, ... or `unknown_N`).
+    pub machine: String,
+    /// Raw `e_machine`.
+    pub machine_raw: u16,
+    /// Entry point; `None` when `e_entry` is 0.
+    pub entry_point: Option<ElfEntryPoint>,
+    /// `PT_INTERP` path (raw attacker data: sanitize before display).
+    pub interpreter: Option<String>,
+    /// Number of program headers.
+    pub number_of_segments: usize,
+    /// Number of usable section headers (0 if absent or ignored).
+    pub number_of_sections: usize,
+    /// Raw `e_flags`.
+    pub flags: u32,
+}
+
+/// Where the ELF entry point is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ElfEntryPoint {
+    /// `e_entry`.
+    pub vaddr: u64,
+    /// Index of the `PT_LOAD` segment containing it, if any.
+    pub segment: Option<usize>,
 }
 
 /// PE facts. Each part is filled by its own analyzer and is `None` if that

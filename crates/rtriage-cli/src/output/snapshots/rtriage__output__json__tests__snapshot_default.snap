@@ -14,6 +14,7 @@ expression: "serde_json::to_string_pretty(&v).unwrap()"
       "analysis_limited": [],
       "errors": [],
       "facts": {
+        "elf": null,
         "entropy": {
           "high_regions": [
             {

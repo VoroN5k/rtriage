@@ -1,0 +1,28 @@
+---
+source: crates/rtriage-cli/src/output/text.rs
+expression: "render_string(&Run { reports: vec![report], failures: vec![], }, PLAIN)"
+---
+implant
+  Type     ELF                        Size  8 944 bytes (8.7 KiB)
+  MD5      afd617cfe659817fb0174432edd4ca9a
+  SHA-1    a7adfe38015457efd100dd8365665b82cf6147b9
+  SHA-256  4a270493b32664c5f0705209a186f392c76d766f096aa05bef4e23b86bb26a8d
+  Risk     [LOW] score 15
+
+Findings
+  [MEDIUM] ELF-INTERP-UNUSUAL  Unusual program interpreter  (confidence: high, anomaly)
+      The requested dynamic loader is a relative path or lives in a world-writable location (/tmp, /dev/shm, ...): whoever controls that path controls the process before main runs.
+      - PT_INTERP = /tmp/.x/ld-linux-x86-64.so.2
+
+ELF
+  Machine      x86_64 (64-bit, little-endian), executable, OS/ABI sysv
+  Entry point  0x401000 in segment #3
+  Interpreter  /tmp/.x/ld-linux-x86-64.so.2
+  Headers      7 segments, 9 sections
+
+Entropy
+  Whole file  0.432 bits/byte
+  No high-entropy regions (>= 7.20, window 4096)
+
+Strings  10 found (ASCII + UTF-16LE, min 5), 1 classified
+  file_path          0x000001c8  A  /tmp/.x/ld-linux-x86-64.so.2

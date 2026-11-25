@@ -9,7 +9,7 @@ use std::io::{self, Write};
 
 use anstyle::{AnsiColor, Style};
 use rtriage_core::report::{
-    AnalysisLimit, PeExportsFacts, PeResourcesFacts, Reduction, SignatureStatus,
+    AnalysisLimit, ElfHeaderFacts, PeExportsFacts, PeResourcesFacts, Reduction, SignatureStatus,
 };
 use rtriage_core::report::{
     EntropyFacts, ExtractedString, PeImportsFacts, PeSectionFacts, StringEncoding, StringKind,
@@ -68,6 +68,9 @@ fn render_report(
     }
     if let Some(pe) = &r.facts.pe {
         render_pe_extras(pe, out)?;
+    }
+    if let Some(h) = r.facts.elf.as_ref().and_then(|e| e.headers.as_ref()) {
+        render_elf_headers(h, out, p)?;
     }
     if let Some(s) = r.facts.pe.as_ref().and_then(|pe| pe.sections.as_deref()) {
         render_pe_sections(s, out, p)?;
@@ -562,6 +565,31 @@ fn render_pe_extras(pe: &PeFacts, out: &mut dyn Write) -> io::Result<()> {
     Ok(())
 }
 
+fn render_elf_headers(h: &ElfHeaderFacts, out: &mut dyn Write, p: &Painter) -> io::Result<()> {
+    writeln!(out, "\n{}", p.heading("ELF"))?;
+    writeln!(
+        out,
+        "  Machine      {} ({}-bit, {}-endian), {}, OS/ABI {}",
+        h.machine, h.bits, h.endianness, h.kind, h.os_abi
+    )?;
+    match &h.entry_point {
+        Some(e) => match e.segment {
+            Some(i) => writeln!(out, "  Entry point  0x{:x} in segment #{i}", e.vaddr)?,
+            None => writeln!(out, "  Entry point  0x{:x} (outside all PT_LOAD)", e.vaddr)?,
+        },
+        None => writeln!(out, "  Entry point  none (e_entry = 0)")?,
+    }
+    match &h.interpreter {
+        Some(i) => writeln!(out, "  Interpreter  {}", sanitize(i))?,
+        None => writeln!(out, "  Interpreter  none (static or library)")?,
+    }
+    writeln!(
+        out,
+        "  Headers      {} segments, {} sections",
+        h.number_of_segments, h.number_of_sections
+    )
+}
+
 /// Exports listed before "+N more".
 const EXPORTS_SHOWN: usize = 20;
 /// Resources listed before "+N more".
@@ -983,6 +1011,26 @@ mod tests {
             .certificate(pkcs7)
             .build();
         let input = Input::from_bytes("helper.dll", built.bytes);
+        let mut report = Registry::default().analyze(&input, &Config::default());
+        prepare(&mut report, false, rtriage_core::Severity::Info);
+        insta::assert_snapshot!(render_string(
+            &Run {
+                reports: vec![report],
+                failures: vec![],
+            },
+            PLAIN
+        ));
+    }
+
+    #[test]
+    fn snapshot_elf_unsafe_interp() {
+        use rtriage_fixtures::elf::ElfBuilder;
+        let built = ElfBuilder::x86_64()
+            .interp("/tmp/.x/ld-linux-x86-64.so.2")
+            .needed("libc.so.6")
+            .imports(&["puts"])
+            .build();
+        let input = Input::from_bytes("implant", built.bytes);
         let mut report = Registry::default().analyze(&input, &Config::default());
         prepare(&mut report, false, rtriage_core::Severity::Info);
         insta::assert_snapshot!(render_string(

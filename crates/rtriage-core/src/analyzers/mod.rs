@@ -8,6 +8,7 @@
 //! (extracted strings, later the parsed PE) is computed lazily, once, inside
 //! [`AnalysisContext`].
 
+pub mod elf;
 pub mod entropy;
 pub mod hashes;
 pub mod pe;
@@ -39,6 +40,7 @@ pub struct AnalysisContext<'a> {
     strings: OnceLock<Result<StringsFacts, AnalysisError>>,
     pe: OnceLock<Result<pe::PeImage, AnalysisError>>,
     pe_imports: OnceLock<Option<pe::imports::ParsedImports>>,
+    elf: OnceLock<Result<elf::ElfImage, AnalysisError>>,
 }
 
 impl<'a> AnalysisContext<'a> {
@@ -52,7 +54,29 @@ impl<'a> AnalysisContext<'a> {
             strings: OnceLock::new(),
             pe: OnceLock::new(),
             pe_imports: OnceLock::new(),
+            elf: OnceLock::new(),
         }
+    }
+
+    /// Parsed ELF headers and tables. Parsed on first call, then cached.
+    ///
+    /// # Errors
+    /// [`AnalysisError::Malformed`] if the input is not an ELF file, otherwise
+    /// whatever [`elf::parse`] reports.
+    pub fn elf(&self) -> Result<&elf::ElfImage, AnalysisError> {
+        self.elf
+            .get_or_init(|| {
+                if self.input.format == Format::Elf {
+                    elf::parse(&self.input.data, &self.config.limits)
+                } else {
+                    Err(AnalysisError::Malformed {
+                        what: "ELF",
+                        reason: "input is not an ELF file".into(),
+                    })
+                }
+            })
+            .as_ref()
+            .map_err(Clone::clone)
     }
 
     /// Parsed PE import table (best effort, see [`pe::imports::ParsedImports`]).
@@ -155,6 +179,8 @@ impl Default for Registry {
             .with(pe::exports::PeExportsAnalyzer)
             .with(pe::resources::PeResourcesAnalyzer)
             .with(pe::authenticode::PeSignatureAnalyzer)
+            .with(elf::ElfParseAnalyzer)
+            .with(elf::headers::ElfHeadersAnalyzer)
     }
 }
 
