@@ -1,0 +1,32 @@
+[package]
+name = "rtriage-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+rtriage-core = { path = "../crates/rtriage-core" }
+
+# Standalone workspace: cargo-fuzz builds with nightly and sanitizer flags
+# that must not leak into the main workspace.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "pe_parse"
+path = "fuzz_targets/pe_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "strings"
+path = "fuzz_targets/strings.rs"
+test = false
+doc = false
+bench = false

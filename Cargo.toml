@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/rtriage-core", "crates/rtriage-cli", "crates/rtriage-fixtures"]
+# cargo-fuzz targets build separately with nightly (see fuzz/README.md).
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.1.0"

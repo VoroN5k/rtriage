@@ -33,6 +33,9 @@ jobs:
       - run: cargo doc --workspace --no-deps --locked
         env:
           RUSTDOCFLAGS: -D warnings
+      # Fuzz targets live outside the workspace; keep them compiling (stable is enough to check).
+      - run: cargo fmt --manifest-path fuzz/Cargo.toml --check
+      - run: cargo check --manifest-path fuzz/Cargo.toml --locked
 
   test:
     name: test (${{ matrix.os }})

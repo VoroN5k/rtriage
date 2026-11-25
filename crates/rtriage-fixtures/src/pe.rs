@@ -1296,3 +1296,68 @@ pub mod imphash_vectors {
         ]
     }
 }
+
+/// One named fixture per PE feature combination. Shared by the property
+/// tests and the fuzzing seed corpus so both exercise the same structures.
+pub fn corpus() -> Vec<(&'static str, Vec<u8>)> {
+    let mut pkcs7 = vec![0x30, 0x82, 0x02, 0x00, 0x06, 0x09];
+    pkcs7.extend_from_slice(&[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02]);
+    pkcs7.resize(300, 0x41);
+    let inner = PeBuilder::minimal(Arch::X86).build().bytes;
+    let mut v = Vec::new();
+    for (arch, tag) in [(Arch::X86, "x86"), (Arch::X64, "x64")] {
+        let named = |n: &str| -> &'static str { Box::leak(format!("{n}_{tag}").into_boxed_str()) };
+        v.push((named("minimal"), PeBuilder::minimal(arch).build().bytes));
+        v.push((named("dotnet"), profiles::dotnet_like(arch).build().bytes));
+        v.push((named("go"), profiles::go_like(arch).build().bytes));
+        v.push((
+            named("upx"),
+            profiles::upx_like(arch).tls_callbacks(2).build().bytes,
+        ));
+        v.push((
+            named("everything"),
+            PeBuilder::minimal(arch)
+                .dll(true)
+                .rich_header(&[(0x0104, 30_795, 12), (0x0105, 30_795, 3)])
+                .import(
+                    "KERNEL32.dll",
+                    &["LoadLibraryA", "GetProcAddress", "ExitProcess"],
+                )
+                .import_ordinals("WS2_32.dll", &[4, 115])
+                .exports(
+                    "x.dll",
+                    vec![
+                        ExportSpec::named("ReflectiveLoader"),
+                        ExportSpec::ordinal_only(),
+                        ExportSpec::forward("F", "KERNEL32.CreateFileW"),
+                    ],
+                )
+                .resource(ResourceSpec::new(10, 1, inner.clone()))
+                .resource(ResourceSpec {
+                    type_id: ResId::Name("CFG".into()),
+                    name: ResId::Name("main".into()),
+                    lang: 0,
+                    data: b"k=v".to_vec(),
+                })
+                .tls_callbacks(1)
+                .pdb_path(r"C:\Users\x\a.pdb")
+                .certificate(pkcs7.clone())
+                .overlay(inner.clone())
+                .build()
+                .bytes,
+        ));
+        v.push((
+            named("virtual_rwx"),
+            PeBuilder::new(arch)
+                .section(
+                    Section::rwx(".a", Vec::new())
+                        .raw_size(0)
+                        .virtual_size(0x10_0000),
+                )
+                .section(Section::rwx(".b", (0..4096u32).map(|i| i as u8).collect()))
+                .build()
+                .bytes,
+        ));
+    }
+    v
+}
