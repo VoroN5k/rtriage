@@ -9,10 +9,14 @@
 //! get their own bounded parsers in later modules.
 
 pub mod api_groups;
+pub mod debug;
 pub mod headers;
 pub mod imports;
 pub mod ordinals;
+pub mod overlay;
+pub mod packers;
 pub mod sections;
+pub mod tls;
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 

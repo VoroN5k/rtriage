@@ -67,6 +67,60 @@ pub struct PeFacts {
     pub sections: Option<Vec<PeSectionFacts>>,
     /// Import table and imphash.
     pub imports: Option<PeImportsFacts>,
+    /// Data appended after the image; `None` if there is none.
+    pub overlay: Option<PeOverlayFacts>,
+    /// TLS callbacks; `None` if the file has no TLS directory.
+    pub tls: Option<PeTlsFacts>,
+    /// CodeView debug information; `None` if the file has none.
+    pub debug: Option<PeDebugFacts>,
+    /// Names of known packers/protectors detected (empty if none).
+    pub packers: Option<Vec<&'static str>>,
+}
+
+/// Data after the end of the image (and after the certificate table, which
+/// is excluded: it is expected trailing data).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PeOverlayFacts {
+    /// File offset where the overlay starts.
+    pub offset: u64,
+    /// Overlay size in bytes.
+    pub size: u64,
+    /// Shannon entropy; `None` if smaller than `section_entropy_min_size`.
+    pub entropy: Option<f64>,
+    /// Format recognised from the first bytes: `pe`, `zip`, `7z`, `rar`,
+    /// `cab`, `gzip`, `pdf`, `nsis`; `None` if unknown.
+    pub kind: Option<&'static str>,
+}
+
+/// TLS directory summary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PeTlsFacts {
+    /// Callbacks in array order.
+    pub callbacks: Vec<PeTlsCallback>,
+    /// `true` if the array was cut at `max_tls_callbacks`.
+    pub limit_reached: bool,
+}
+
+/// One TLS callback.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PeTlsCallback {
+    /// Virtual address as stored.
+    pub va: u64,
+    /// Section containing it, if the address maps into one.
+    pub section: Option<SectionRef>,
+}
+
+/// CodeView debug record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PeDebugFacts {
+    /// `RSDS` (PDB 7.0) or `NB10` (PDB 2.0).
+    pub codeview: &'static str,
+    /// PDB path as stored (raw attacker data: sanitize before display).
+    pub pdb_path: String,
+    /// PDB GUID (`RSDS` only), `XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX`.
+    pub pdb_guid: Option<String>,
+    /// PDB age.
+    pub pdb_age: u32,
 }
 
 /// Import table summary.

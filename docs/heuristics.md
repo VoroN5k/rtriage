@@ -345,6 +345,113 @@ case. Extensions shorter than the minimum string length (`.pdf` alone, 4
 characters, with the default of 5) only count when they appear inside a
 longer string such as an extension list.
 
+### PE overlay (`pe-overlay` analyzer)
+
+The image ends at the furthest of `SizeOfHeaders` and every section's
+`PointerToRawData + SizeOfRawData`. A certificate table (SECURITY directory,
+which holds a file offset) starting at or after that point and ending within
+the file is skipped: an Authenticode signature is expected trailing data.
+Bytes after it are overlay (they are not covered by the signature).
+A certificate entry pointing past EOF is ignored rather than trusted.
+`kind` is recognised from magic bytes: `pe`, `zip`, `7z`, `rar`, `cab`,
+`gzip`, `pdf`, `nsis`.
+
+| ID | Sev / Conf | Points | Category | Trigger |
+|---|---|---|---|---|
+| `PE-OVERLAY` | Info / High | 0 | `anomaly` | Overlay present. Evidence: `range`, `field kind`. |
+| `PE-OVERLAY-HIGH-ENTROPY` | Low / Medium | 4 | `packing` | Overlay of at least `section_entropy_min_size` bytes with entropy >= `entropy_high`, **and** `kind` is not an archive/installer format (`zip`, `7z`, `rar`, `cab`, `gzip`, `nsis`), whose own compression explains the entropy. Evidence: `range`, `metric entropy`. |
+| `PE-OVERLAY-EMBEDDED-PE` | Medium / Medium | 11 | `anomaly` | Overlay starts with a valid PE (`MZ` + `PE\0\0` at `e_lfanew`). Evidence: `range`. |
+
+**False positives.** Installers and self-extractors (overlay with
+compressed data, often in a custom format: high entropy). Embedded PEs:
+installers and binders that carry a second program in plain form.
+
+### PE TLS callbacks (`pe-tls` analyzer)
+
+Bounded parser: at most `max_tls_callbacks` (256) callbacks, one budget step
+each; VAs are converted with `ImageBase` using checked arithmetic.
+
+#### `PE-TLS-CALLBACKS`
+
+| | |
+|---|---|
+| Severity / confidence | Low / Medium (4 points) |
+| Category | `anti_analysis` |
+| Trigger | TLS directory with at least one callback (`AddressOfCallBacks != 0` and a non-empty array). |
+| Evidence | `field callback = 0x<VA> in #<i> <section>`, up to 8 |
+
+**Rationale.** Callbacks run before the entry point, which hides code from a
+debugger stopped at the entry point; used for anti-debugging and early
+unpacking.
+**False positives.** Common in benign code: the Rust standard library and
+MinGW/GCC runtimes register TLS callbacks for thread-local destructors.
+A TLS directory with no callbacks (plain `thread_local` data) is not
+flagged.
+
+### PE debug information (`pe-debug` analyzer)
+
+Reads at most `max_debug_entries` (64) debug directory entries and the first
+CodeView record (`RSDS` = PDB 7.0 with GUID and age, or `NB10` = PDB 2.0),
+capped at 1 KiB.
+
+#### `PE-PDB-PATH`
+
+| | |
+|---|---|
+| Severity / confidence | Info / High (0 points) |
+| Category | `metadata` |
+| Trigger | A CodeView record with a non-empty PDB path. |
+| Evidence | `field PdbPath`; `field user` when the path contains `\Users\<name>\`, `\Documents and Settings\<name>\` or `/home/<name>/` (not `Public`). |
+
+**Rationale.** Build paths leak user names, project names and build layouts:
+useful for attribution and for clustering samples from one build machine.
+Pure context, so Info.
+
+### PE packers (`pe-packers` analyzer)
+
+Name and signature matching only; nothing is unpacked or emulated.
+
+#### `PE-PACKER-KNOWN`
+
+| | |
+|---|---|
+| Severity / confidence | Medium / High (15 points) |
+| Category | `packing` |
+| Trigger | A section named exactly as a known packer writes it, or a known signature in the first 4 KiB of the headers. |
+| Evidence | `field packer`, matching `section`s, `range` + `field signature` for signatures |
+
+| Packer | Section names | Header signature |
+|---|---|---|
+| UPX | `UPX0`–`UPX3` | `UPX!` |
+| ASPack | `.aspack`, `.adata` | |
+| Themida/WinLicense | `.themida`, `.winlice` | |
+| VMProtect | `.vmp0`–`.vmp2` | |
+| MPRESS | `.MPRESS1`, `.MPRESS2` | |
+| PECompact | `pec1`–`pec3`, `PEC2*` | |
+| Petite | `.petite` | |
+| NsPack | `.nsp0`–`.nsp2`, `nsp0`–`nsp2` | |
+| Enigma Protector | `.enigma1`, `.enigma2` | |
+| kkrunchy | `kkrunchy` | |
+
+Names are case-sensitive (`.upx`, `upx0` do not match). The header signature
+lets UPX be recognised even when its sections were renamed.
+**False positives.** Legitimate software is packed too (UPX-compressed
+tools, commercial protectors for licensing/DRM).
+
+#### `PE-PACKED-LIKELY`
+
+| | |
+|---|---|
+| Severity / confidence | Medium / Low (6 points) |
+| Category | `packing` |
+| Trigger | No known packer, not managed .NET, an executable section with at least `section_entropy_min_size` raw bytes and entropy >= `entropy_high`, **and** at most `imports_few_max` (10) imported functions (table not limit-truncated). |
+| Evidence | `section`, `metric entropy`, `field imported functions` |
+
+**Rationale.** Custom or modified packers have no known signature but keep
+the shape: compressed code, minimal imports.
+**False positives.** Small programs embedding encrypted/compressed blobs in
+their code section. Low confidence for that reason.
+
 ### Facts that suppress heuristics
 
 - `facts.pe.headers.managed_dotnet`: set when the CLR (COM descriptor) data

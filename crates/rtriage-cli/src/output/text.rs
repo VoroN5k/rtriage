@@ -12,7 +12,9 @@ use rtriage_core::report::{
     EntropyFacts, ExtractedString, PeImportsFacts, PeSectionFacts, StringEncoding, StringKind,
     StringsFacts,
 };
-use rtriage_core::{Evidence, Finding, Format, PeHeaderFacts, Report, RiskLevel, Severity};
+use rtriage_core::{
+    Evidence, Finding, Format, PeFacts, PeHeaderFacts, Report, RiskLevel, Severity,
+};
 use serde::Serialize;
 
 use super::{Failure, Run};
@@ -55,6 +57,9 @@ fn render_report(
     render_findings(&r.findings, out, p)?;
     if let Some(h) = r.facts.pe.as_ref().and_then(|pe| pe.headers.as_ref()) {
         render_pe_headers(h, out, p)?;
+    }
+    if let Some(pe) = &r.facts.pe {
+        render_pe_extras(pe, out)?;
     }
     if let Some(s) = r.facts.pe.as_ref().and_then(|pe| pe.sections.as_deref()) {
         render_pe_sections(s, out, p)?;
@@ -397,6 +402,43 @@ fn render_pe_sections(
     Ok(())
 }
 
+/// Packer, overlay, TLS and PDB lines, appended to the PE block.
+fn render_pe_extras(pe: &PeFacts, out: &mut dyn Write) -> io::Result<()> {
+    if let Some(packers) = pe.packers.as_ref().filter(|p| !p.is_empty()) {
+        writeln!(out, "  Packer       {}", packers.join(", "))?;
+    }
+    if let Some(o) = &pe.overlay {
+        let entropy = o
+            .entropy
+            .map_or_else(String::new, |e| format!(", entropy {e:.3}"));
+        writeln!(
+            out,
+            "  Overlay      0x{:x}, {}, {}{entropy}",
+            o.offset,
+            short_size(o.size),
+            o.kind.unwrap_or("unknown format")
+        )?;
+    }
+    if let Some(t) = pe.tls.as_ref().filter(|t| !t.callbacks.is_empty()) {
+        let list: Vec<String> = t
+            .callbacks
+            .iter()
+            .map(|c| format!("0x{:x}", c.va))
+            .collect();
+        writeln!(
+            out,
+            "  TLS          {} callback(s): {}{}",
+            t.callbacks.len(),
+            list.join(", "),
+            if t.limit_reached { " (truncated)" } else { "" }
+        )?;
+    }
+    if let Some(d) = &pe.debug {
+        writeln!(out, "  PDB          {}", sanitize(&d.pdb_path))?;
+    }
+    Ok(())
+}
+
 /// Functions listed per library before "+N more".
 const IMPORTS_PER_LIBRARY: usize = 8;
 
@@ -671,6 +713,26 @@ mod tests {
             .import_ordinals("WS2_32.dll", &[23])
             .build();
         let input = Input::from_bytes("sample.exe", built.bytes);
+        let mut report = Registry::default().analyze(&input, &Config::default());
+        prepare(&mut report, false);
+        insta::assert_snapshot!(render_string(
+            &Run {
+                reports: vec![report],
+                failures: vec![],
+            },
+            PLAIN
+        ));
+    }
+
+    #[test]
+    fn snapshot_upx_like() {
+        use rtriage_fixtures::pe::{profiles, Arch};
+        let built = profiles::upx_like(Arch::X86)
+            .tls_callbacks(1)
+            .pdb_path(r"C:\Users\dev\proj\Release\tool.pdb")
+            .overlay(b"PK\x03\x04 appended archive".to_vec())
+            .build();
+        let input = Input::from_bytes("packed.exe", built.bytes);
         let mut report = Registry::default().analyze(&input, &Config::default());
         prepare(&mut report, false);
         insta::assert_snapshot!(render_string(

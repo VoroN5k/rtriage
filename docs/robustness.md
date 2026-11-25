@@ -12,6 +12,8 @@ analyzer. This document lists the defences and where they live.
 | `max_segments` | 4096 | ELF program headers. |
 | `max_imports` | 65 536 | Import thunks across **all** libraries of a file, so many descriptors sharing one thunk array cannot multiply the work. |
 | `max_import_libraries` | 4096 | Import descriptors per file. |
+| `max_tls_callbacks` | 256 | TLS callback array entries. |
+| `max_debug_entries` | 64 | Debug directory entries (CodeView records are capped at 1 KiB). |
 | `max_exports` | 65 536 | Export entries. |
 | `max_strings` | 200 000 | Strings kept (the rest are only counted). |
 | `max_string_len` | 4096 | Characters copied per string. |

@@ -25,6 +25,10 @@ pub struct Limits {
     pub max_imports: usize,
     /// Max imported libraries (import descriptors) processed. Default: 4096.
     pub max_import_libraries: usize,
+    /// Max TLS callbacks read. Default: 256.
+    pub max_tls_callbacks: usize,
+    /// Max debug directory entries read. Default: 64.
+    pub max_debug_entries: usize,
     /// Max exported symbols processed. Default: 65 536.
     pub max_exports: usize,
     /// Max strings kept by the string extractor. Default: 200 000.
@@ -64,6 +68,8 @@ impl Default for Limits {
             max_segments: 4096,
             max_imports: 65_536,
             max_import_libraries: 4096,
+            max_tls_callbacks: 256,
+            max_debug_entries: 64,
             max_exports: 65_536,
             max_strings: 200_000,
             max_string_len: 4096,

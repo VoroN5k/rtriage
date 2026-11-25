@@ -146,6 +146,10 @@ impl Default for Registry {
             .with(pe::sections::PeSectionsAnalyzer)
             .with(pe::imports::PeImportsAnalyzer)
             .with(pe::api_groups::PeApiGroupsAnalyzer)
+            .with(pe::overlay::PeOverlayAnalyzer)
+            .with(pe::tls::PeTlsAnalyzer)
+            .with(pe::debug::PeDebugAnalyzer)
+            .with(pe::packers::PePackersAnalyzer)
     }
 }
 

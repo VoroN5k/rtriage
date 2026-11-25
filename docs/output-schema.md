@@ -112,6 +112,19 @@ Every member is `null` if its analyzer did not run.
 | `limit_reached` | bool | Parsing stopped at `max_imports` or `max_import_libraries`. |
 | `imphash` | string \| null | pefile-compatible import hash; `null` without imports. |
 
+`pe.overlay` (`null` if none): `{ offset, size, entropy, kind }`; `entropy`
+is `null` under 512 bytes; `kind` is `pe`, `zip`, `7z`, `rar`, `cab`, `gzip`,
+`pdf`, `nsis` or `null`. A trailing certificate table is not overlay.
+
+`pe.tls` (`null` without a TLS directory): `{ callbacks: [{ va, section }],
+limit_reached }`; `section` is `{ index, name }` or `null`.
+
+`pe.debug` (`null` without a CodeView record): `{ codeview, pdb_path,
+pdb_guid, pdb_age }`; `codeview` is `RSDS` or `NB10`; `pdb_guid` is
+`XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX` (`RSDS` only) or `null`.
+
+`pe.packers`: array of detected packer names (empty if none), e.g. `["UPX"]`.
+
 A PE that fails to parse produces one `errors` entry from analyzer
 `pe-parse`; the other PE analyzers then leave their facts `null`.
 

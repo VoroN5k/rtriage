@@ -217,6 +217,8 @@ pub struct PeBuilder {
     pdb_path: Option<Vec<u8>>,
     clr: bool,
     auto_section_name: Vec<u8>,
+    header_extra: Vec<u8>,
+    certificate: Option<Vec<u8>>,
     overlay: Vec<u8>,
 }
 
@@ -237,6 +239,8 @@ impl PeBuilder {
             pdb_path: None,
             clr: false,
             auto_section_name: b".rdata".to_vec(),
+            header_extra: Vec::new(),
+            certificate: None,
             overlay: Vec::new(),
         }
     }
@@ -330,6 +334,21 @@ impl PeBuilder {
         self.clr = true;
         self
     }
+    /// Bytes placed in the headers right after the section table (where UPX
+    /// stores its `UPX!` block); `SizeOfHeaders` grows to fit.
+    #[must_use]
+    pub fn header_extra(mut self, bytes: Vec<u8>) -> Self {
+        self.header_extra = bytes;
+        self
+    }
+    /// Appends an Authenticode-style certificate table (`WIN_CERTIFICATE`
+    /// wrapping `blob`) after the last section and before any overlay, and
+    /// points the SECURITY data directory (a *file offset*) at it.
+    #[must_use]
+    pub fn certificate(mut self, blob: Vec<u8>) -> Self {
+        self.certificate = Some(blob);
+        self
+    }
     /// Renames the auto-generated section holding imports/TLS/debug/CLR data
     /// (default `.rdata`).
     #[must_use]
@@ -356,7 +375,8 @@ impl PeBuilder {
         let coff_offset = PE_OFFSET + 4;
         let optional_offset = coff_offset + 20;
         let section_table_offset = optional_offset + arch.optional_header_size();
-        let headers_end = section_table_offset + 40 * n_sections;
+        let section_table_end = section_table_offset + 40 * n_sections;
+        let headers_end = section_table_end + self.header_extra.len();
         let size_of_headers = align(headers_end as u32, FILE_ALIGN);
 
         // Place user sections.
@@ -508,6 +528,28 @@ impl PeBuilder {
             }
         }
 
+        f[section_table_end..headers_end].copy_from_slice(&self.header_extra);
+
+        let certificate_offset = self.certificate.as_ref().map(|blob| {
+            while !f.len().is_multiple_of(8) {
+                f.push(0);
+            }
+            let at = f.len();
+            let len = 8 + blob.len();
+            f.extend_from_slice(&(len as u32).to_le_bytes()); // dwLength
+            f.extend_from_slice(&0x0200u16.to_le_bytes()); // WIN_CERT_REVISION_2_0
+            f.extend_from_slice(&0x0002u16.to_le_bytes()); // WIN_CERT_TYPE_PKCS_SIGNED_DATA
+            f.extend_from_slice(blob);
+            while !f.len().is_multiple_of(8) {
+                f.push(0);
+            }
+            // SECURITY directory holds a file offset, not an RVA.
+            put_u32(&mut f, dd_offset + 4 * 8, at as u32);
+            let table_len = (f.len() - at) as u32;
+            put_u32(&mut f, dd_offset + 4 * 8 + 4, table_len);
+            at
+        });
+
         f.extend_from_slice(&self.overlay);
 
         match self.checksum {
@@ -530,6 +572,7 @@ impl PeBuilder {
                 section_table_offset,
                 sections: layouts,
                 image_end,
+                certificate_offset,
             },
         }
     }
@@ -700,8 +743,11 @@ pub struct Layout {
     pub section_table_offset: usize,
     /// Placement of every section, user sections first, then the auto `.rdata`.
     pub sections: Vec<SectionLayout>,
-    /// End of the last section's raw data = start of the overlay.
+    /// End of the last section's raw data (start of the overlay, unless a
+    /// certificate table follows).
     pub image_end: usize,
+    /// File offset of the certificate table, if one was added.
+    pub certificate_offset: Option<usize>,
 }
 
 impl Layout {
@@ -797,7 +843,7 @@ fn align8(b: &mut Vec<u8>) {
 /// Benign look-alike profiles of common toolchains, used as negative tests:
 /// heuristics must not fire on them just because they look unusual.
 pub mod profiles {
-    use super::{Arch, PeBuilder, Section};
+    use super::{Arch, Entry, PeBuilder, Section};
 
     /// Managed .NET assembly: CLR header, a single import
     /// (`mscoree.dll!_CorExeMain`), `.text` / `.rsrc` / `.reloc`.
@@ -879,6 +925,40 @@ pub mod profiles {
             .section(Section::rdata(".symtab", vec![0u8; 4]))
             .import("kernel32.dll", GO_KERNEL32_IMPORTS)
             .auto_section_name(".idata")
+    }
+
+    /// UPX-style packed executable (synthetic): virtual-only `UPX0`, high-entropy
+    /// RWX `UPX1` holding the entry point, `UPX!` block in the headers and the
+    /// classic minimal import set. Contains no real packed code.
+    pub fn upx_like(arch: Arch) -> PeBuilder {
+        // Every byte value equally often: entropy 8.0, like compressed data.
+        let payload: Vec<u8> = (0..8192u32).map(|i| (i % 256) as u8).collect();
+        let mut upx_block = b"3.96\0UPX!".to_vec();
+        upx_block.extend_from_slice(&[0x0d, 0x09, 0x08, 0x07]);
+        PeBuilder::new(arch)
+            .header_extra(upx_block)
+            .section(
+                Section::rwx("UPX0", Vec::new())
+                    .raw_size(0)
+                    .virtual_size(0x2_0000),
+            )
+            .section(Section::rwx("UPX1", payload))
+            .section(Section::data(".rsrc", vec![0u8; 64]))
+            .entry(Entry::Section {
+                index: 1,
+                offset: 0x100,
+            })
+            .import(
+                "KERNEL32.DLL",
+                &[
+                    "LoadLibraryA",
+                    "GetProcAddress",
+                    "VirtualProtect",
+                    "VirtualAlloc",
+                    "VirtualFree",
+                    "ExitProcess",
+                ],
+            )
     }
 }
 
