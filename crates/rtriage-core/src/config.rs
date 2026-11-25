@@ -4,10 +4,12 @@
 //! never as a magic number inside an analyzer.
 
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
 use serde::Serialize;
 
 use crate::limits::Limits;
+use crate::rules::ApiRuleSet;
 
 /// Everything an analysis run can be tuned with.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -18,6 +20,9 @@ pub struct Config {
     pub thresholds: Thresholds,
     /// Minimum string length (in characters) for extraction. Default: 5.
     pub strings_min_len: NonZeroUsize,
+    /// API behavior rules; `None` = the bundled `rules/api_groups.toml`.
+    #[serde(skip)]
+    pub api_rules: Option<Arc<ApiRuleSet>>,
 }
 
 impl Config {
@@ -34,6 +39,7 @@ impl Default for Config {
             limits: Limits::default(),
             thresholds: Thresholds::default(),
             strings_min_len: Self::DEFAULT_STRINGS_MIN_LEN,
+            api_rules: None,
         }
     }
 }

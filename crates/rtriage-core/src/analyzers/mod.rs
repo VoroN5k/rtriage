@@ -37,6 +37,7 @@ pub struct AnalysisContext<'a> {
     pub now: SystemTime,
     strings: OnceLock<Result<StringsFacts, AnalysisError>>,
     pe: OnceLock<Result<pe::PeImage, AnalysisError>>,
+    pe_imports: OnceLock<Option<pe::imports::ParsedImports>>,
 }
 
 impl<'a> AnalysisContext<'a> {
@@ -49,7 +50,24 @@ impl<'a> AnalysisContext<'a> {
             now: SystemTime::now(),
             strings: OnceLock::new(),
             pe: OnceLock::new(),
+            pe_imports: OnceLock::new(),
         }
+    }
+
+    /// Parsed PE import table (best effort, see [`pe::imports::ParsedImports`]).
+    /// `None` if the input is not a PE or its headers failed to parse.
+    pub fn pe_imports(&self) -> Option<&pe::imports::ParsedImports> {
+        self.pe_imports
+            .get_or_init(|| {
+                let image = self.pe().ok()?;
+                Some(pe::imports::parse(
+                    image,
+                    &self.input.data,
+                    &self.config.limits,
+                    &self.deadline,
+                ))
+            })
+            .as_ref()
     }
 
     /// Parsed PE headers and section table. Parsed on first call, then cached.
@@ -127,6 +145,7 @@ impl Default for Registry {
             .with(pe::headers::PeHeadersAnalyzer)
             .with(pe::sections::PeSectionsAnalyzer)
             .with(pe::imports::PeImportsAnalyzer)
+            .with(pe::api_groups::PeApiGroupsAnalyzer)
     }
 }
 

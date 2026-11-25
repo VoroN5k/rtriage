@@ -299,6 +299,52 @@ import tables (e.g. the Go runtime: 40 kernel32 imports including
 functions are used.
 **False positives.** Vendor SDK DLLs exported by ordinal only.
 
+### PE API behavior groups (`pe-api-groups` analyzer)
+
+The groups are **data**, in [`rules/api_groups.toml`](../rules/api_groups.toml):
+each group's rationale and false positives are written next to its
+conditions there. The bundled file is compiled in; `--api-rules <FILE>`
+replaces it with a file of the same format (validated strictly: unknown
+fields, bad enum values, malformed or duplicate IDs, IDs without the
+`PE-API-` prefix and bad API patterns are load errors, exit code 2).
+
+**Matching.** APIs come from the import table: named imports, plus
+ordinal-only imports of `ws2_32` / `wsock32` / `oleaut32` resolved to names.
+Names are case-sensitive; a trailing `*` matches any suffix. A group fires
+once, on its first matching `when` alternative; evidence lists the matched
+imports and up to 5 matching strings. Strings are only extracted if some
+rule needs them.
+
+| ID | Sev / Conf | Points | Category | ATT&CK | Fires when |
+|---|---|---|---|---|---|
+| `PE-API-INJECTION` | High / High | 40 | `injection` | T1055 | `OpenProcess` + remote alloc (`VirtualAllocEx`, `NtAllocateVirtualMemory`, ...) + remote write (`WriteProcessMemory`, `NtWriteVirtualMemory`) + remote execution (`CreateRemoteThread*`, `NtCreateThreadEx`, `RtlCreateUserThread`, `QueueUserAPC`, `NtQueueApcThread`) |
+| `PE-API-ANTIDEBUG` | Low / Medium | 4 | `anti_analysis` | T1622 | at least **2 different** of `IsDebuggerPresent`, `CheckRemoteDebuggerPresent`, `NtQueryInformationProcess`, `NtSetInformationThread`, `OutputDebugString*` |
+| `PE-API-PERSISTENCE-REGISTRY` | Medium / Medium | 11 | `persistence` | T1547.001 | registry write (`RegSetValueEx*`, `RegCreateKeyEx*`, `RegSetKeyValue*`, `SHSetValue*`) + a string containing `CurrentVersion\Run`, `...\Policies\Explorer\Run` or `Windows NT\CurrentVersion\Winlogon` |
+| `PE-API-PERSISTENCE-SERVICE` | Medium / Low | 6 | `persistence` | T1543.003 | `CreateService*` + `StartService*` |
+| `PE-API-NETWORK` | Low / Medium | 4 | `network` | T1071 | WinINet (`InternetOpen*`, ...), WinHTTP (`WinHttpOpen`, ...) or Winsock (`WSAStartup` + `connect`/`WSAConnect*`) + a URL / IPv4 / IPv6 string |
+| `PE-API-RANSOM-CRYPTO` | High / Low | 16 | `impact` | T1486 | `CryptEncrypt`/`BCryptEncrypt` + `FindFirstFile*` + `FindNextFile*` + strings mentioning at least **8 different** document/database extensions |
+| `PE-API-CREDENTIALS` | Medium / Medium | 11 | `credential_access` | T1555 | `CredEnumerate*` or `LsaEnumerateLogonSessions`; **or** `CryptUnprotectData` + at least **3 different** browser password-store markers (`\Google\Chrome\User Data`, `\Mozilla\Firefox\Profiles`, `logins.json`, `key4.db`, `Login Data`, ...) |
+| `PE-API-KEYLOGGING` | Medium / Low | 6 | `collection` | T1056.001 | `SetWindowsHookEx*` + key translation (`GetAsyncKeyState`, `ToUnicode*`, `GetKeyNameText*`, `MapVirtualKey*`, ...); **or** `GetAsyncKeyState` + `GetForegroundWindow` + `GetWindowText*` |
+
+**Why combinations.** Every one of these APIs alone is common in benign
+software. Notably the MSVC runtime imports `IsDebuggerPresent` into almost
+every program, Chromium-based browsers call `CryptUnprotectData` on their own
+`Login Data`, and the Go runtime imports thread-context and memory APIs:
+negative tests cover each of these.
+
+**False positives** (per group, also in the rules file): debuggers, profilers
+and anti-cheat (injection); DRM and games (anti-debug, keylogging);
+installers and "start with Windows" options (registry, service);
+any app with a built-in update URL (network); backup/sync tools (ransom);
+password managers and browser-migration tools (credentials); hotkey,
+accessibility and macro tools (keylogging).
+
+**Known gaps.** APIs resolved at run time (by name strings passed to
+`GetProcAddress`) are not seen; `PE-IMPORTS-DYNAMIC-RESOLUTION` covers that
+case. Extensions shorter than the minimum string length (`.pdf` alone, 4
+characters, with the default of 5) only count when they appear inside a
+longer string such as an extension list.
+
 ### Facts that suppress heuristics
 
 - `facts.pe.headers.managed_dotnet`: set when the CLR (COM descriptor) data

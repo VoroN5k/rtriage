@@ -103,3 +103,88 @@ fn output_flag_writes_file() {
     let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&report).unwrap()).unwrap();
     assert_eq!(v["schema_version"], 1);
 }
+
+/// Writes an injection-chain PE to a per-test file (tests run in parallel).
+fn injection_pe(name: &str) -> PathBuf {
+    use rtriage_fixtures::pe::{Arch, PeBuilder};
+    let bytes = PeBuilder::minimal(Arch::X64)
+        .import(
+            "KERNEL32.dll",
+            &[
+                "OpenProcess",
+                "VirtualAllocEx",
+                "WriteProcessMemory",
+                "CreateRemoteThread",
+                "Beep",
+            ],
+        )
+        .build()
+        .bytes;
+    scratch(name, &bytes)
+}
+
+fn finding_ids(v: &serde_json::Value) -> Vec<String> {
+    v["reports"][0]["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn bundled_api_rules_apply_by_default() {
+    let out = rtriage(&[injection_pe("inject-1.exe").to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(finding_ids(&json(&out)).contains(&"PE-API-INJECTION".to_owned()));
+}
+
+#[test]
+fn custom_api_rules_replace_bundled() {
+    let rules = scratch(
+        "custom-rules.toml",
+        br#"
+schema_version = 1
+[[group]]
+id = "PE-API-BEEP"
+title = "Beeps"
+severity = "info"
+confidence = "high"
+category = "metadata"
+rationale = "Imports Beep."
+[[group.when]]
+slots = [["Beep"]]
+"#,
+    );
+    let out = rtriage(&[
+        "--api-rules",
+        rules.to_str().unwrap(),
+        injection_pe("inject-2.exe").to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(0));
+    let ids = finding_ids(&json(&out));
+    assert!(ids.contains(&"PE-API-BEEP".to_owned()));
+    assert!(!ids.contains(&"PE-API-INJECTION".to_owned()));
+}
+
+#[test]
+fn invalid_api_rules_are_a_usage_error() {
+    let rules = scratch(
+        "bad-rules.toml",
+        b"schema_version = 1\n[[group]]\nid = \"nope\"\n",
+    );
+    let out = rtriage(&[
+        "--api-rules",
+        rules.to_str().unwrap(),
+        injection_pe("inject-3.exe").to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot load API rules"));
+}
+
+#[test]
+fn missing_api_rules_file_is_a_usage_error() {
+    let out = rtriage(&["--api-rules", "no-such-rules.toml", "x.bin"]);
+    assert_eq!(out.status.code(), Some(2));
+}

@@ -5,7 +5,7 @@
 //!
 //! Keeping them separate lets output be re-scored without re-parsing.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::AnalysisError;
 
@@ -269,7 +269,7 @@ pub struct ExtractedString {
 
 /// Classification of an extracted string. A string can have several kinds
 /// (a URL also contains a domain). Pattern-based, so treat as hints.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum StringKind {
@@ -300,7 +300,7 @@ pub enum StringKind {
 /// Shannon entropy summary of the whole file.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EntropyFacts {
-    /// Entropy of the entire file, in bits per byte (0.0–8.0).
+    /// Entropy of the entire file, in bits per byte (0.0вЂ“8.0).
     pub whole_file: f64,
     /// Window size used for region detection, in bytes.
     pub window: u64,
@@ -322,7 +322,7 @@ pub struct EntropyRegion {
 }
 
 /// How serious a finding is if it is meaningful. Ordered `Info < Low < Medium < High`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
     /// Context for the analyst; does not raise suspicion on its own.
@@ -336,7 +336,7 @@ pub enum Severity {
 }
 
 /// How likely the finding is to be meaningful rather than a false positive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Confidence {
     /// Heuristic with known false positives.
@@ -348,7 +348,7 @@ pub enum Confidence {
 }
 
 /// Behavioral area a finding belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Category {

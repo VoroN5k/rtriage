@@ -13,6 +13,7 @@ use std::process::ExitCode;
 use anstream::{AutoStream, ColorChoice};
 use anyhow::Context;
 use clap::Parser;
+use rtriage_core::rules::ApiRuleSet;
 use rtriage_core::{Config, Registry};
 use tracing::level_filters::LevelFilter;
 
@@ -23,13 +24,22 @@ use crate::sanitize::sanitize;
 
 /// At least one file could not be analyzed, or output could not be written.
 const EXIT_RUNTIME_ERROR: u8 = 1;
+/// Invalid invocation or configuration (clap uses the same code).
+const EXIT_USAGE: u8 = 2;
 
 fn main() -> ExitCode {
     // clap exits with code 2 on usage errors.
     let cli = Cli::parse();
     install_panic_hook();
     init_logging(&cli);
-    match run(&cli) {
+    let config = match build_config(&cli) {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("error: {}", sanitize(&format!("{err:#}")));
+            return ExitCode::from(EXIT_USAGE);
+        }
+    };
+    match run(&cli, &config) {
         Ok(code) => code,
         Err(err) => {
             eprintln!("error: {}", sanitize(&format!("{err:#}")));
@@ -38,8 +48,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
-    let config = build_config(cli);
+fn run(cli: &Cli, config: &Config) -> anyhow::Result<ExitCode> {
     let registry = Registry::default();
     let mut result = Run {
         reports: Vec::new(),
@@ -47,7 +56,7 @@ fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
     };
 
     for path in &cli.files {
-        match triage(path, &registry, &config) {
+        match triage(path, &registry, config) {
             Ok(mut report) => {
                 output::prepare(&mut report, cli.all_strings);
                 result.reports.push(report);
@@ -73,7 +82,7 @@ fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
     })
 }
 
-fn build_config(cli: &Cli) -> Config {
+fn build_config(cli: &Cli) -> anyhow::Result<Config> {
     let mut config = Config {
         strings_min_len: cli.strings_min,
         ..Config::default()
@@ -82,7 +91,26 @@ fn build_config(cli: &Cli) -> Config {
         config.limits.max_file_size = max;
     }
     config.limits.max_analysis_time = std::time::Duration::from_secs(cli.timeout.get());
-    config
+    if let Some(path) = &cli.api_rules {
+        config.api_rules = Some(std::sync::Arc::new(load_api_rules(path)?));
+    }
+    Ok(config)
+}
+
+/// Reads and validates a custom API rules file, refusing oversized files
+/// before reading them.
+fn load_api_rules(path: &Path) -> anyhow::Result<ApiRuleSet> {
+    let context = || format!("cannot load API rules {}", path.display());
+    let len = std::fs::metadata(path).with_context(context)?.len();
+    let limit = rtriage_core::rules::MAX_RULES_FILE_SIZE;
+    if usize::try_from(len).map_or(true, |l| l > limit) {
+        anyhow::bail!(
+            "{}: file is {len} bytes, over the {limit}-byte limit",
+            context()
+        );
+    }
+    let text = std::fs::read_to_string(path).with_context(context)?;
+    ApiRuleSet::parse(&text).with_context(context)
 }
 
 /// Loads and analyzes one file. Directories get a dedicated message.

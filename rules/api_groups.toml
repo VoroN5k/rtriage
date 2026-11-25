@@ -1,0 +1,196 @@
+# rtriage API behavior groups for PE files.
+#
+# Each [[group]] becomes one finding when ANY of its [[group.when]] blocks
+# matches. Single APIs are everywhere; rules describe COMBINATIONS.
+#
+# Matching
+#   - APIs come from the import table: named imports, plus ordinal-only
+#     imports of ws2_32 / wsock32 / oleaut32 resolved to names.
+#   - Names are case-sensitive. A trailing "*" matches any suffix
+#     ("RegSetValueEx*" = RegSetValueExA, RegSetValueExW). No other wildcards.
+#   - `slots`:   every slot (inner list) needs at least one imported API.
+#   - `any_of` + `min`: at least `min` DIFFERENT APIs from the list.
+#     Both may be used in one block; then both must hold.
+#   - `strings`: optional; extracted strings must show at least `min_distinct`
+#     different hits among `kinds` (string classifications) and `contains`
+#     (case-insensitive substrings).
+#
+# Severity / confidence / category / ATT&CK are documented in
+# docs/heuristics.md together with the scoring table. Changing a group's
+# `id` breaks report consumers: add a changelog note.
+#
+# A custom file with the same format can replace this one: --api-rules <FILE>.
+
+schema_version = 1
+
+# --------------------------------------------------------------------------
+[[group]]
+id = "PE-API-INJECTION"
+title = "Process injection API chain"
+severity = "high"
+confidence = "high"
+category = "injection"
+attack = ["T1055"]
+rationale = """Imports the full chain needed to run code in another process: \
+open it, allocate memory in it, write to it, and start a thread or queue an APC there."""
+false_positives = """Debuggers, profilers, game trainers, anti-cheat and some \
+security products legitimately inject into other processes."""
+
+[[group.when]]
+slots = [
+    ["OpenProcess", "NtOpenProcess"],
+    ["VirtualAllocEx", "VirtualAlloc2", "NtAllocateVirtualMemory"],
+    ["WriteProcessMemory", "NtWriteVirtualMemory"],
+    ["CreateRemoteThread", "CreateRemoteThreadEx", "NtCreateThreadEx", "RtlCreateUserThread", "QueueUserAPC", "NtQueueApcThread"],
+]
+
+# --------------------------------------------------------------------------
+[[group]]
+id = "PE-API-ANTIDEBUG"
+title = "Several anti-debugging checks"
+severity = "low"
+confidence = "medium"
+category = "anti_analysis"
+attack = ["T1622"]
+rationale = """Imports more than one way to detect a debugger. A single \
+IsDebuggerPresent is imported by the MSVC runtime into almost every program, so \
+it never counts on its own."""
+false_positives = """DRM, games and anti-cheat; tools that combine the CRT's \
+IsDebuggerPresent with NtQueryInformationProcess for process inspection."""
+
+[[group.when]]
+any_of = ["IsDebuggerPresent", "CheckRemoteDebuggerPresent", "NtQueryInformationProcess", "NtSetInformationThread", "OutputDebugString*"]
+min = 2
+
+# --------------------------------------------------------------------------
+[[group]]
+id = "PE-API-PERSISTENCE-REGISTRY"
+title = "Writes a Run-key style autostart entry"
+severity = "medium"
+confidence = "medium"
+category = "persistence"
+attack = ["T1547.001"]
+rationale = """Imports registry write APIs and contains the path of an \
+autostart registry location (Run / RunOnce / Winlogon)."""
+false_positives = """Installers and software with an "start with Windows" \
+option write the same keys."""
+
+[[group.when]]
+slots = [["RegSetValueEx*", "RegCreateKeyEx*", "RegSetKeyValue*", "SHSetValue*"]]
+strings = { contains = ['CurrentVersion\Run', 'CurrentVersion\Policies\Explorer\Run', 'Windows NT\CurrentVersion\Winlogon'] }
+
+# --------------------------------------------------------------------------
+[[group]]
+id = "PE-API-PERSISTENCE-SERVICE"
+title = "Creates and starts a Windows service"
+severity = "medium"
+confidence = "low"
+category = "persistence"
+attack = ["T1543.003"]
+rationale = """Imports the APIs to register a new service and start it, a \
+common way to persist with SYSTEM privileges."""
+false_positives = """Installers, updaters and service management tools do \
+exactly this."""
+
+[[group.when]]
+slots = [
+    ["CreateService*"],
+    ["StartService*"],
+]
+
+# --------------------------------------------------------------------------
+[[group]]
+id = "PE-API-NETWORK"
+title = "Network client with embedded addresses"
+severity = "low"
+confidence = "medium"
+category = "network"
+attack = ["T1071"]
+rationale = """Imports an HTTP or socket client API set and contains at least \
+one URL or IP address: a hard-coded remote endpoint."""
+false_positives = """Any networked application with a built-in update or \
+telemetry URL."""
+
+[[group.when]]
+slots = [["InternetOpen*", "InternetOpenUrl*", "InternetConnect*", "HttpSendRequest*", "URLDownloadToFile*"]]
+strings = { kinds = ["url", "ipv4", "ipv6"] }
+
+[[group.when]]
+slots = [["WinHttpOpen", "WinHttpConnect", "WinHttpSendRequest"]]
+strings = { kinds = ["url", "ipv4", "ipv6"] }
+
+[[group.when]]
+slots = [
+    ["WSAStartup"],
+    ["connect", "WSAConnect", "WSAConnectByName*"],
+]
+strings = { kinds = ["url", "ipv4", "ipv6"] }
+
+# --------------------------------------------------------------------------
+[[group]]
+id = "PE-API-RANSOM-CRYPTO"
+title = "File encryption with document-extension targeting"
+severity = "high"
+confidence = "low"
+category = "impact"
+attack = ["T1486"]
+rationale = """Imports encryption and directory enumeration APIs and contains \
+many document/database file extensions: the shape of ransomware that walks the \
+disk and encrypts selected file types."""
+false_positives = """Backup, archiving and file-sync tools also encrypt files \
+they enumerate; low confidence for that reason."""
+
+[[group.when]]
+slots = [
+    ["CryptEncrypt", "BCryptEncrypt"],
+    ["FindFirstFile*"],
+    ["FindNextFile*"],
+]
+strings = { contains = [".docx", ".xlsx", ".pptx", ".pdf", ".jpg", ".png", ".zip", ".rar", ".7z", ".sql", ".mdb", ".accdb", ".bak", ".psd", ".dwg", ".odt", ".csv"], min_distinct = 8 }
+
+# --------------------------------------------------------------------------
+[[group]]
+id = "PE-API-CREDENTIALS"
+title = "Credential store access"
+severity = "medium"
+confidence = "medium"
+category = "credential_access"
+attack = ["T1555"]
+rationale = """Enumerates stored Windows credentials or logon sessions, or \
+decrypts DPAPI data while referencing several browsers' password stores."""
+false_positives = """Password managers and browser-migration tools (importing \
+from other browsers). Chromium-based browsers themselves use DPAPI and their own \
+"Login Data" file, hence the requirement for several different browser stores."""
+
+[[group.when]]
+any_of = ["CredEnumerateA", "CredEnumerateW", "LsaEnumerateLogonSessions"]
+
+[[group.when]]
+slots = [["CryptUnprotectData"]]
+strings = { contains = ['\Google\Chrome\User Data', '\Microsoft\Edge\User Data', '\BraveSoftware\Brave-Browser', '\Mozilla\Firefox\Profiles', 'logins.json', 'key4.db', 'Login Data'], min_distinct = 3 }
+
+# --------------------------------------------------------------------------
+[[group]]
+id = "PE-API-KEYLOGGING"
+title = "Keyboard capture"
+severity = "medium"
+confidence = "low"
+category = "collection"
+attack = ["T1056.001"]
+rationale = """Installs a hook and translates key states, or polls key states \
+together with the foreground window title: the two classic keylogger designs."""
+false_positives = """Hotkey utilities, accessibility tools, macro recorders and \
+games."""
+
+[[group.when]]
+slots = [
+    ["SetWindowsHookExA", "SetWindowsHookExW"],
+    ["GetAsyncKeyState", "GetKeyboardState", "ToUnicode", "ToUnicodeEx", "ToAscii", "ToAsciiEx", "GetKeyNameText*", "MapVirtualKey*"],
+]
+
+[[group.when]]
+slots = [
+    ["GetAsyncKeyState"],
+    ["GetForegroundWindow"],
+    ["GetWindowText*"],
+]

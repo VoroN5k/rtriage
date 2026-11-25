@@ -25,6 +25,7 @@ pub mod error;
 pub mod input;
 pub mod limits;
 pub mod report;
+pub mod rules;
 
 pub use analyzers::{AnalysisContext, Analyzer, Registry};
 pub use config::{Config, Thresholds};

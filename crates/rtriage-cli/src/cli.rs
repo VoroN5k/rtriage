@@ -35,6 +35,11 @@ pub struct Cli {
     #[arg(long, value_name = "BYTES")]
     pub max_size: Option<u64>,
 
+    /// Replace the bundled API behavior rules with this TOML file
+    /// (same format as rules/api_groups.toml).
+    #[arg(long, value_name = "FILE")]
+    pub api_rules: Option<PathBuf>,
+
     /// Hard time limit per file, in seconds (must be > 0). When it expires the
     /// remaining analyzers are skipped and the report is marked partial.
     #[arg(long, value_name = "SECONDS", default_value = "30")]

@@ -8,6 +8,7 @@
 //! taking down the whole analysis. Data directories (imports, TLS, debug)
 //! get their own bounded parsers in later modules.
 
+pub mod api_groups;
 pub mod headers;
 pub mod imports;
 pub mod ordinals;

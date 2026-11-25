@@ -76,19 +76,14 @@ impl Analyzer for PeImportsAnalyzer {
     }
 
     fn run(&self, ctx: &AnalysisContext<'_>, out: &mut ReportBuilder) -> Result<(), AnalysisError> {
-        let Some(pe) = super::pe_or_skip(ctx) else {
+        let (Some(pe), Some(parsed)) = (super::pe_or_skip(ctx), ctx.pe_imports()) else {
             return Ok(());
         };
-        let parsed = parse(pe, &ctx.input.data, &ctx.config.limits, &ctx.deadline);
         let facts = PeImportsFacts {
-            total_functions: parsed
-                .libraries
-                .iter()
-                .map(|l| l.functions.len() as u64)
-                .sum(),
+            total_functions: parsed.total_functions(),
             imphash: imphash(&parsed.libraries),
             limit_reached: parsed.limit_reached,
-            libraries: parsed.libraries,
+            libraries: parsed.libraries.clone(),
         };
 
         if !pe.is_managed_dotnet() && !parsed.limit_reached {
@@ -101,22 +96,51 @@ impl Analyzer for PeImportsAnalyzer {
         ordinal_only_finding(&facts, out);
 
         out.facts.pe.get_or_insert_with(PeFacts::default).imports = Some(facts);
-        parsed.error.map_or(Ok(()), Err)
+        parsed.error.clone().map_or(Ok(()), Err)
     }
 }
 
-/// Result of a best-effort parse.
-#[derive(Debug, Default)]
-struct Parsed {
-    libraries: Vec<PeImportLibrary>,
-    limit_reached: bool,
-    /// First error hit; parsing stops or skips past it.
-    error: Option<AnalysisError>,
+/// Result of a best-effort import parse, shared via
+/// [`AnalysisContext::pe_imports`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ParsedImports {
+    /// Libraries read, in descriptor order.
+    pub libraries: Vec<PeImportLibrary>,
+    /// Parsing stopped at `max_imports` / `max_import_libraries`.
+    pub limit_reached: bool,
+    /// First error hit; parsing stopped or skipped past it.
+    pub error: Option<AnalysisError>,
+}
+
+impl ParsedImports {
+    /// Imported functions across all libraries.
+    pub fn total_functions(&self) -> u64 {
+        self.libraries
+            .iter()
+            .map(|l| l.functions.len() as u64)
+            .sum()
+    }
+
+    /// Every imported API name with its library, in table order. Ordinal-only
+    /// imports of ws2_32 / wsock32 / oleaut32 are resolved to names.
+    pub fn api_names(&self) -> impl Iterator<Item = (&str, &str)> + '_ {
+        self.libraries.iter().flat_map(|lib| {
+            let lower = lib.name.to_lowercase();
+            lib.functions.iter().filter_map(move |f| {
+                let name = match (&f.name, f.ordinal) {
+                    (Some(n), _) => Some(n.as_str()),
+                    (None, Some(o)) => ordinals::lookup(&lower, o),
+                    (None, None) => None,
+                }?;
+                Some((lib.name.as_str(), name))
+            })
+        })
+    }
 }
 
 /// Walks the import directory within `limits` and `deadline`.
-fn parse(pe: &PeImage, data: &[u8], limits: &Limits, deadline: &Deadline) -> Parsed {
-    let mut p = Parsed::default();
+pub fn parse(pe: &PeImage, data: &[u8], limits: &Limits, deadline: &Deadline) -> ParsedImports {
+    let mut p = ParsedImports::default();
     let Some(dir) = pe.directory(DIRECTORY_IMPORT) else {
         return p;
     };
