@@ -31,6 +31,19 @@ pub struct FileInfo {
     pub size: u64,
     /// Detected format.
     pub format: Format,
+    /// Cryptographic hashes; `None` until the hashes analyzer has run.
+    pub hashes: Option<Hashes>,
+}
+
+/// Cryptographic hashes of the whole file, as lowercase hex.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Hashes {
+    /// MD5 (32 hex chars). Weak, kept for compatibility with threat-intel feeds.
+    pub md5: String,
+    /// SHA-1 (40 hex chars). Weak, kept for compatibility with threat-intel feeds.
+    pub sha1: String,
+    /// SHA-256 (64 hex chars).
+    pub sha256: String,
 }
 
 /// Neutral data extracted from the file. Analyzers add fields as they land.
@@ -311,6 +324,11 @@ impl ReportBuilder {
         &self.findings
     }
 
+    /// Records the file hashes.
+    pub fn set_hashes(&mut self, hashes: Hashes) {
+        self.file.hashes = Some(hashes);
+    }
+
     /// Finishes the report with the given risk.
     ///
     /// Findings are sorted by severity (desc), confidence (desc), then id, so
@@ -342,6 +360,7 @@ mod tests {
             path: "sample.bin".into(),
             size: 0,
             format: Format::Unknown,
+            hashes: None,
         }
     }
 

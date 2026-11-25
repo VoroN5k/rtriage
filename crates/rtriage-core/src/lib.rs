@@ -11,17 +11,19 @@
 )]
 #![warn(missing_docs)]
 
+pub mod analyzers;
 pub mod error;
 pub mod input;
 pub mod limits;
 pub mod report;
 
+pub use analyzers::{AnalysisContext, Analyzer, Registry};
 pub use error::{AnalysisError, Error};
 pub use input::{load, sniff_format, Input};
 pub use limits::Limits;
 pub use report::{
-    Category, Confidence, Evidence, Facts, FileInfo, Finding, Format, Report, ReportBuilder, Risk,
-    RiskLevel, Severity,
+    Category, Confidence, Evidence, Facts, FileInfo, Finding, Format, Hashes, Report,
+    ReportBuilder, Risk, RiskLevel, Severity,
 };
 
 /// Crate version, as recorded in `Cargo.toml`.

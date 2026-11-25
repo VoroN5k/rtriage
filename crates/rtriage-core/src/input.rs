@@ -56,6 +56,7 @@ impl Input {
             path: self.path.to_string_lossy().into_owned(),
             size: self.size(),
             format: self.format,
+            hashes: None,
         }
     }
 }
