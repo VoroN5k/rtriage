@@ -403,12 +403,12 @@ the file is skipped: an Authenticode signature is expected trailing data.
 Bytes after it are overlay (they are not covered by the signature).
 A certificate entry pointing past EOF is ignored rather than trusted.
 `kind` is recognised from magic bytes: `pe`, `zip`, `7z`, `rar`, `cab`,
-`gzip`, `pdf`, `nsis`.
+`gzip`, `pdf`, `nsis`, `png`, `jpeg`, `gif`.
 
 | ID | Sev / Conf | Points | Category | Trigger |
 |---|---|---|---|---|
 | `PE-OVERLAY` | Info / High | 0 | `anomaly` | Overlay present. Evidence: `range`, `field kind`. |
-| `PE-OVERLAY-HIGH-ENTROPY` | Low / Medium | 4 | `packing` | Overlay of at least `section_entropy_min_size` bytes with entropy >= `entropy_high`, **and** `kind` is not an archive/installer format (`zip`, `7z`, `rar`, `cab`, `gzip`, `nsis`), whose own compression explains the entropy. Evidence: `range`, `metric entropy`. |
+| `PE-OVERLAY-HIGH-ENTROPY` | Low / Medium | 4 | `packing` | Overlay of at least `section_entropy_min_size` bytes with entropy >= `entropy_high`, **and** `kind` is not a compressed format (`zip`, `7z`, `rar`, `cab`, `gzip`, `nsis`, `png`, `jpeg`, `gif`), whose own compression explains the entropy. Evidence: `range`, `metric entropy`. |
 | `PE-OVERLAY-EMBEDDED-PE` | Medium / Medium | 11 | `anomaly` | Overlay starts with a valid PE (`MZ` + `PE\0\0` at `e_lfanew`). Evidence: `range`. |
 
 **False positives.** Installers and self-extractors (overlay with

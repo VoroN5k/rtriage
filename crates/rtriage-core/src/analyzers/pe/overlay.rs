@@ -25,7 +25,9 @@ use crate::report::{
 const DIRECTORY_SECURITY: usize = 4;
 
 /// Formats whose own compression explains high entropy.
-const ARCHIVE_KINDS: &[&str] = &["zip", "7z", "rar", "cab", "gzip", "nsis"];
+pub const COMPRESSED_KINDS: &[&str] = &[
+    "zip", "7z", "rar", "cab", "gzip", "nsis", "png", "jpeg", "gif",
+];
 
 /// Reports the overlay and judges its contents.
 #[derive(Debug, Clone, Copy, Default)]
@@ -61,7 +63,7 @@ impl Analyzer for PeOverlayAnalyzer {
             offset: to_u64(start),
             size: to_u64(bytes.len()),
             entropy,
-            kind: kind(bytes),
+            kind: content_kind(bytes),
         };
 
         let range = Evidence::Range {
@@ -102,7 +104,7 @@ impl Analyzer for PeOverlayAnalyzer {
                 .evidence(range.clone()),
             );
         }
-        let archive = facts.kind.is_some_and(|k| ARCHIVE_KINDS.contains(&k));
+        let archive = facts.kind.is_some_and(|k| COMPRESSED_KINDS.contains(&k));
         if let Some(e) = entropy.filter(|&e| e >= t.entropy_high && !archive) {
             out.push_finding(
                 Finding::new(
@@ -153,8 +155,8 @@ pub fn overlay_start(pe: &PeImage, file_len: usize) -> Option<usize> {
     (end < file_len).then_some(end)
 }
 
-/// Recognises a few container formats by magic bytes.
-fn kind(bytes: &[u8]) -> Option<&'static str> {
+/// Recognises a few container/media formats by magic bytes (shared with resources).
+pub fn content_kind(bytes: &[u8]) -> Option<&'static str> {
     const MAGICS: &[(&[u8], &str)] = &[
         (b"PK\x03\x04", "zip"),
         (b"7z\xbc\xaf\x27\x1c", "7z"),
@@ -162,6 +164,9 @@ fn kind(bytes: &[u8]) -> Option<&'static str> {
         (b"MSCF", "cab"),
         (b"\x1f\x8b", "gzip"),
         (b"%PDF", "pdf"),
+        (b"\x89PNG\r\n\x1a\n", "png"),
+        (b"\xff\xd8\xff", "jpeg"),
+        (b"GIF8", "gif"),
     ];
     if sniff_format(bytes) == Format::Pe {
         return Some("pe");

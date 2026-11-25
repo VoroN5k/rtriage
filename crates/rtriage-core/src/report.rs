@@ -75,6 +75,138 @@ pub struct PeFacts {
     pub debug: Option<PeDebugFacts>,
     /// Known packers/protectors detected (empty if none).
     pub packers: Option<Vec<PePackerFacts>>,
+    /// Rich header; `None` if absent.
+    pub rich: Option<PeRichFacts>,
+    /// Export table; `None` if the file has none.
+    pub exports: Option<PeExportsFacts>,
+    /// Resources; `None` if the file has no resource directory.
+    pub resources: Option<PeResourcesFacts>,
+    /// Authenticode certificate table structure; `None` if unsigned.
+    pub signature: Option<PeSignatureFacts>,
+}
+
+/// Rich header: build tool records left by the Microsoft linker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PeRichFacts {
+    /// File offset of the `DanS` marker.
+    pub offset: u64,
+    /// XOR key stored after `Rich` (it doubles as the checksum).
+    pub key: u32,
+    /// Checksum recomputed from the DOS header and the records.
+    pub computed_checksum: u32,
+    /// `key == computed_checksum`; `false` means the header or records were edited.
+    pub checksum_valid: bool,
+    /// Records in stored order.
+    pub entries: Vec<PeRichEntry>,
+}
+
+/// One Rich record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct PeRichEntry {
+    /// Tool/product ID (`@comp.id` high word).
+    pub product_id: u16,
+    /// Tool build number.
+    pub build: u16,
+    /// How many objects this tool produced.
+    pub count: u32,
+}
+
+/// Export table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PeExportsFacts {
+    /// DLL name stored in the export directory (raw attacker data).
+    pub dll_name: Option<String>,
+    /// Export directory `TimeDateStamp`.
+    pub timestamp: u32,
+    /// Ordinal `Base`.
+    pub ordinal_base: u32,
+    /// Exports in ordinal order (empty slots omitted).
+    pub exports: Vec<PeExport>,
+    /// `true` if the table was cut at `max_exports`.
+    pub limit_reached: bool,
+}
+
+/// One exported function.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PeExport {
+    /// Ordinal (`Base` + index).
+    pub ordinal: u32,
+    /// Name, if exported by name (raw attacker data).
+    pub name: Option<String>,
+    /// RVA of the code, or of the forwarder string.
+    pub rva: u32,
+    /// Forwarder target (`DLL.Function`), if forwarded.
+    pub forwarder: Option<String>,
+}
+
+/// Resource directory contents.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PeResourcesFacts {
+    /// Leaves in tree order.
+    pub entries: Vec<PeResource>,
+    /// `true` if the walk stopped at `max_resources`.
+    pub limit_reached: bool,
+}
+
+/// One resource leaf.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PeResource {
+    /// Type: `RT_ICON`, `RT_RCDATA`, ..., `#<id>` or a custom name.
+    pub type_name: String,
+    /// Name: `#<id>` or a string.
+    pub name: String,
+    /// Language ID.
+    pub lang: u32,
+    /// Data RVA.
+    pub rva: u32,
+    /// Data size as declared.
+    pub size: u32,
+    /// Entropy of the data present in the file; `None` under 512 bytes.
+    pub entropy: Option<f64>,
+    /// Content format from magic bytes (`pe`, `zip`, `png`, ...).
+    pub kind: Option<&'static str>,
+}
+
+/// Authenticode certificate table structure. The signature is **not**
+/// verified (no certificate chain or hash check).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PeSignatureFacts {
+    /// File offset of the table.
+    pub offset: u64,
+    /// Declared size.
+    pub size: u64,
+    /// `signed_unverified` if the structure is sound, else `malformed`.
+    pub status: SignatureStatus,
+    /// `WIN_CERTIFICATE` entries.
+    pub certificates: Vec<PeCertificate>,
+    /// Structural problems found (empty when `signed_unverified`).
+    pub problems: Vec<String>,
+}
+
+/// Outcome of the structural check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignatureStatus {
+    /// Well-formed table holding a PKCS#7 SignedData blob; not verified.
+    SignedUnverified,
+    /// Present but structurally broken.
+    Malformed,
+}
+
+/// One `WIN_CERTIFICATE` entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PeCertificate {
+    /// File offset.
+    pub offset: u64,
+    /// `dwLength`.
+    pub length: u32,
+    /// `wRevision`.
+    pub revision: u16,
+    /// `wCertificateType` name: `x509`, `pkcs_signed_data`, `reserved`,
+    /// `ts_stack_signed`, or `unknown`.
+    pub kind: &'static str,
+    /// Blob starts like a DER PKCS#7 SignedData (`1.2.840.113549.1.7.2`).
+    pub pkcs7_signed_data: bool,
 }
 
 /// A detected packer and which independent indicators were seen.

@@ -116,7 +116,7 @@ Every member is `null` if its analyzer did not run.
 
 `pe.overlay` (`null` if none): `{ offset, size, entropy, kind }`; `entropy`
 is `null` under 512 bytes; `kind` is `pe`, `zip`, `7z`, `rar`, `cab`, `gzip`,
-`pdf`, `nsis` or `null`. A trailing certificate table is not overlay.
+`pdf`, `nsis`, `png`, `jpeg`, `gif` or `null`. A trailing certificate table is not overlay.
 
 `pe.tls` (`null` without a TLS directory): `{ callbacks: [{ va, section }],
 limit_reached }`; `section` is `{ index, name }` or `null`.
@@ -128,6 +128,26 @@ pdb_guid, pdb_age }`; `codeview` is `RSDS` or `NB10`; `pdb_guid` is
 `pe.packers`: array of detected packers (empty if none):
 `{ name, indicators }`, e.g.
 `{ "name": "UPX", "indicators": ["section_names", "header_signature", "stub_structure"] }`.
+
+`pe.rich` (`null` if absent): `{ offset, key, computed_checksum,
+checksum_valid, entries: [{ product_id, build, count }] }`. `offset` is the
+`DanS` marker; `checksum_valid` is `key == computed_checksum`.
+
+`pe.exports` (`null` without an export table): `{ dll_name, timestamp,
+ordinal_base, exports: [{ ordinal, name, rva, forwarder }], limit_reached }`.
+`name` is `null` for ordinal-only exports; `forwarder` (`"DLL.Function"`) is
+set when the address points inside the export directory.
+
+`pe.resources` (`null` without a resource directory): `{ entries: [{
+type_name, name, lang, rva, size, entropy, kind }], limit_reached }`.
+`type_name` is `RT_*` for standard types, else `#<id>` or the stored name;
+`name` is `#<id>` or the stored name; `kind` as for the overlay.
+
+`pe.signature` (`null` when unsigned): `{ offset, size, status,
+certificates: [{ offset, length, revision, kind, pkcs7_signed_data }],
+problems }`. `status` is `signed_unverified` (well-formed table containing a
+PKCS#7 SignedData) or `malformed` (see `problems`). **The signature is never
+verified**: no hash or certificate chain check.
 
 A PE that fails to parse produces one `errors` entry from analyzer
 `pe-parse`; the other PE analyzers then leave their facts `null`.

@@ -29,6 +29,10 @@ pub struct Limits {
     pub max_tls_callbacks: usize,
     /// Max debug directory entries read. Default: 64.
     pub max_debug_entries: usize,
+    /// Max resource leaves read. Default: 4096.
+    pub max_resources: usize,
+    /// Max `WIN_CERTIFICATE` entries read. Default: 16.
+    pub max_certificates: usize,
     /// Max exported symbols processed. Default: 65 536.
     pub max_exports: usize,
     /// Max strings kept by the string extractor. Default: 200 000.
@@ -70,6 +74,8 @@ impl Default for Limits {
             max_import_libraries: 4096,
             max_tls_callbacks: 256,
             max_debug_entries: 64,
+            max_resources: 4096,
+            max_certificates: 16,
             max_exports: 65_536,
             max_strings: 200_000,
             max_string_len: 4096,

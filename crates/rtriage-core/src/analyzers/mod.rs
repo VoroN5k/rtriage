@@ -151,6 +151,10 @@ impl Default for Registry {
             .with(pe::tls::PeTlsAnalyzer)
             .with(pe::debug::PeDebugAnalyzer)
             .with(pe::packers::PePackersAnalyzer)
+            .with(pe::rich::PeRichAnalyzer)
+            .with(pe::exports::PeExportsAnalyzer)
+            .with(pe::resources::PeResourcesAnalyzer)
+            .with(pe::authenticode::PeSignatureAnalyzer)
     }
 }
 

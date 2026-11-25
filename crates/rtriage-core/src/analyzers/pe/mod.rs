@@ -9,12 +9,16 @@
 //! get their own bounded parsers in later modules.
 
 pub mod api_groups;
+pub mod authenticode;
 pub mod debug;
+pub mod exports;
 pub mod headers;
 pub mod imports;
 pub mod ordinals;
 pub mod overlay;
 pub mod packers;
+pub mod resources;
+pub mod rich;
 pub mod sections;
 pub mod tls;
 

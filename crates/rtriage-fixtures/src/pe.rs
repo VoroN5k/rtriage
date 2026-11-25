@@ -174,6 +174,76 @@ pub enum ImportEntry {
     Ordinal(u16),
 }
 
+/// One Rich header record: `(product id, build number, use count)`.
+pub type RichEntry = (u16, u16, u32);
+
+/// One exported function.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportSpec {
+    /// Export name; `None` = exported by ordinal only.
+    pub name: Option<String>,
+    /// Forwarder string (`"DLL.Function"`); `None` = code in this image.
+    pub forwarder: Option<String>,
+}
+
+impl ExportSpec {
+    /// Named export pointing at code.
+    pub fn named(name: &str) -> Self {
+        Self {
+            name: Some(name.to_owned()),
+            forwarder: None,
+        }
+    }
+    /// Ordinal-only export pointing at code.
+    pub fn ordinal_only() -> Self {
+        Self {
+            name: None,
+            forwarder: None,
+        }
+    }
+    /// Named export forwarded to `target` (`"KERNEL32.CreateFileW"`).
+    pub fn forward(name: &str, target: &str) -> Self {
+        Self {
+            name: Some(name.to_owned()),
+            forwarder: Some(target.to_owned()),
+        }
+    }
+}
+
+/// Resource type or name: numeric ID or string.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ResId {
+    /// String name (sorted before IDs, as the loader expects).
+    Name(String),
+    /// Numeric ID.
+    Id(u16),
+}
+
+/// One resource leaf.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceSpec {
+    /// Type (e.g. `ResId::Id(10)` = `RT_RCDATA`).
+    pub type_id: ResId,
+    /// Name.
+    pub name: ResId,
+    /// Language ID.
+    pub lang: u16,
+    /// Data.
+    pub data: Vec<u8>,
+}
+
+impl ResourceSpec {
+    /// Resource with numeric type and name, language 1033 (en-US).
+    pub fn new(type_id: u16, name: u16, data: Vec<u8>) -> Self {
+        Self {
+            type_id: ResId::Id(type_id),
+            name: ResId::Id(name),
+            lang: 1033,
+            data,
+        }
+    }
+}
+
 /// Where `AddressOfEntryPoint` points.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Entry {
@@ -218,6 +288,9 @@ pub struct PeBuilder {
     clr: bool,
     auto_section_name: Vec<u8>,
     header_extra: Vec<u8>,
+    rich: Option<Vec<RichEntry>>,
+    exports: Option<(String, Vec<ExportSpec>)>,
+    resources: Vec<ResourceSpec>,
     certificate: Option<Vec<u8>>,
     overlay: Vec<u8>,
 }
@@ -240,6 +313,9 @@ impl PeBuilder {
             clr: false,
             auto_section_name: b".rdata".to_vec(),
             header_extra: Vec::new(),
+            rich: None,
+            exports: None,
+            resources: Vec::new(),
             certificate: None,
             overlay: Vec::new(),
         }
@@ -334,6 +410,29 @@ impl PeBuilder {
         self.clr = true;
         self
     }
+    /// Adds a Rich header (at most 5 entries) at offset 0x40 with a correct
+    /// checksum. `Layout::rich_offset` points at its `DanS` marker.
+    #[must_use]
+    pub fn rich_header(mut self, entries: &[RichEntry]) -> Self {
+        assert!(
+            entries.len() <= 5,
+            "fixture Rich header holds at most 5 entries"
+        );
+        self.rich = Some(entries.to_vec());
+        self
+    }
+    /// Adds an export directory naming the DLL `dll_name`.
+    #[must_use]
+    pub fn exports(mut self, dll_name: &str, entries: Vec<ExportSpec>) -> Self {
+        self.exports = Some((dll_name.to_owned(), entries));
+        self
+    }
+    /// Adds one resource (type / name / language / data).
+    #[must_use]
+    pub fn resource(mut self, spec: ResourceSpec) -> Self {
+        self.resources.push(spec);
+        self
+    }
     /// Bytes placed in the headers right after the section table (where UPX
     /// stores its `UPX!` block); `SizeOfHeaders` grows to fit.
     #[must_use]
@@ -369,7 +468,9 @@ impl PeBuilder {
         let has_auto = !self.imports.is_empty()
             || self.tls_callbacks > 0
             || self.pdb_path.is_some()
-            || self.clr;
+            || self.clr
+            || self.exports.is_some()
+            || !self.resources.is_empty();
         let n_sections = self.sections.len() + usize::from(has_auto);
 
         let coff_offset = PE_OFFSET + 4;
@@ -427,6 +528,10 @@ impl PeBuilder {
         // DOS header.
         f[0..2].copy_from_slice(b"MZ");
         put_u32(&mut f, 0x3c, PE_OFFSET as u32);
+        let rich_offset = self.rich.as_ref().map(|entries| {
+            write_rich(&mut f, entries);
+            RICH_OFFSET
+        });
 
         // PE signature + COFF header.
         f[PE_OFFSET..PE_OFFSET + 4].copy_from_slice(b"PE\0\0");
@@ -573,6 +678,7 @@ impl PeBuilder {
                 sections: layouts,
                 image_end,
                 certificate_offset,
+                rich_offset,
             },
         }
     }
@@ -704,10 +810,144 @@ impl PeBuilder {
             dirs.push((14, base_rva + cor20 as u32, 72)); // CLR runtime header
         }
 
+        if let Some((dll, entries)) = &self.exports {
+            align8(&mut b);
+            let dir = b.len();
+            b.resize(dir + 40, 0);
+            let name_off = b.len();
+            b.extend_from_slice(dll.as_bytes());
+            b.push(0);
+            align8(&mut b);
+            let funcs = b.len();
+            b.resize(funcs + 4 * entries.len(), 0);
+            // Names sorted, as the loader's binary search expects.
+            let mut named: Vec<(usize, &str)> = entries
+                .iter()
+                .enumerate()
+                .filter_map(|(i, e)| e.name.as_deref().map(|n| (i, n)))
+                .collect();
+            named.sort_by(|a, b| a.1.cmp(b.1));
+            let names = b.len();
+            b.resize(names + 4 * named.len(), 0);
+            let ords = b.len();
+            b.resize(ords + 2 * named.len(), 0);
+            for (j, (i, n)) in named.iter().enumerate() {
+                let at = b.len();
+                b.extend_from_slice(n.as_bytes());
+                b.push(0);
+                put_u32(&mut b, names + 4 * j, base_rva + at as u32);
+                put_u16(&mut b, ords + 2 * j, *i as u16);
+            }
+            for (i, e) in entries.iter().enumerate() {
+                let rva = match &e.forwarder {
+                    Some(target) => {
+                        let at = b.len();
+                        b.extend_from_slice(target.as_bytes());
+                        b.push(0);
+                        base_rva + at as u32
+                    }
+                    None => callback_rva + 16 * i as u32,
+                };
+                put_u32(&mut b, funcs + 4 * i, rva);
+            }
+            put_u32(&mut b, dir + 4, self.timestamp);
+            put_u32(&mut b, dir + 12, base_rva + name_off as u32);
+            put_u32(&mut b, dir + 16, 1); // Base
+            put_u32(&mut b, dir + 20, entries.len() as u32);
+            put_u32(&mut b, dir + 24, named.len() as u32);
+            put_u32(&mut b, dir + 28, base_rva + funcs as u32);
+            put_u32(&mut b, dir + 32, base_rva + names as u32);
+            put_u32(&mut b, dir + 36, base_rva + ords as u32);
+            // Directory size covers everything, so forwarder strings fall inside it.
+            dirs.push((0, base_rva + dir as u32, (b.len() - dir) as u32)); // EXPORT
+        }
+
+        if !self.resources.is_empty() {
+            align8(&mut b);
+            let root = b.len();
+            write_resources(&mut b, root, base_rva, &self.resources);
+            dirs.push((2, base_rva + root as u32, (b.len() - root) as u32)); // RESOURCE
+        }
+
         AutoContent {
             bytes: b,
             directories: dirs,
         }
+    }
+}
+
+/// type -> name -> [(language, spec index)]; BTreeMap order puts named entries first.
+type ResourceTree<'a> =
+    std::collections::BTreeMap<&'a ResId, std::collections::BTreeMap<&'a ResId, Vec<(u16, usize)>>>;
+
+/// Writes a three-level resource tree (type / name / language) at `root`.
+/// All directory offsets are relative to `root`; data RVAs use `base_rva`.
+fn write_resources(b: &mut Vec<u8>, root: usize, base_rva: u32, specs: &[ResourceSpec]) {
+    use std::collections::BTreeMap;
+    // type -> name -> [(lang, spec index)], BTreeMap order = named first, then IDs.
+    let mut tree: ResourceTree<'_> = BTreeMap::new();
+    for (i, s) in specs.iter().enumerate() {
+        tree.entry(&s.type_id)
+            .or_default()
+            .entry(&s.name)
+            .or_default()
+            .push((s.lang, i));
+    }
+    let mut names_to_write: Vec<(usize, String)> = Vec::new(); // (entry offset, name)
+    let mut data_entries: Vec<(usize, usize)> = Vec::new(); // (data entry offset, spec index)
+
+    let dir = |b: &mut Vec<u8>, ids: Vec<&ResId>| -> usize {
+        let at = b.len();
+        b.resize(at + 16 + 8 * ids.len(), 0);
+        let named = ids.iter().filter(|i| matches!(i, ResId::Name(_))).count();
+        put_u16(b, at + 12, named as u16);
+        put_u16(b, at + 14, (ids.len() - named) as u16);
+        at
+    };
+    let set_id =
+        |b: &mut Vec<u8>, entry: usize, id: &ResId, names: &mut Vec<(usize, String)>| match id {
+            ResId::Id(n) => put_u32(b, entry, u32::from(*n)),
+            ResId::Name(s) => names.push((entry, s.clone())),
+        };
+
+    let root_dir = dir(b, tree.keys().copied().collect());
+    for (ti, (type_id, names)) in tree.iter().enumerate() {
+        let type_entry = root_dir + 16 + 8 * ti;
+        set_id(b, type_entry, type_id, &mut names_to_write);
+        let type_dir = dir(b, names.keys().copied().collect());
+        put_u32(b, type_entry + 4, 0x8000_0000 | (type_dir - root) as u32);
+        for (ni, (name, langs)) in names.iter().enumerate() {
+            let name_entry = type_dir + 16 + 8 * ni;
+            set_id(b, name_entry, name, &mut names_to_write);
+            let lang_ids: Vec<ResId> = langs.iter().map(|(l, _)| ResId::Id(*l)).collect();
+            let lang_dir = dir(b, lang_ids.iter().collect());
+            put_u32(b, name_entry + 4, 0x8000_0000 | (lang_dir - root) as u32);
+            for (li, (lang, spec)) in langs.iter().enumerate() {
+                let lang_entry = lang_dir + 16 + 8 * li;
+                put_u32(b, lang_entry, u32::from(*lang));
+                let data_entry = b.len();
+                b.resize(data_entry + 16, 0);
+                put_u32(b, lang_entry + 4, (data_entry - root) as u32); // leaf: no high bit
+                data_entries.push((data_entry, *spec));
+            }
+        }
+    }
+    for (entry, name) in names_to_write {
+        pad2(b);
+        let at = b.len();
+        let units: Vec<u16> = name.encode_utf16().collect();
+        b.extend_from_slice(&(units.len() as u16).to_le_bytes());
+        for u in units {
+            b.extend_from_slice(&u.to_le_bytes());
+        }
+        put_u32(b, entry, 0x8000_0000 | (at - root) as u32);
+    }
+    for (entry, spec) in data_entries {
+        align8(b);
+        let at = b.len();
+        b.extend_from_slice(&specs[spec].data);
+        put_u32(b, entry, base_rva + at as u32);
+        put_u32(b, entry + 4, specs[spec].data.len() as u32);
     }
 }
 
@@ -748,6 +988,48 @@ pub struct Layout {
     pub image_end: usize,
     /// File offset of the certificate table, if one was added.
     pub certificate_offset: Option<usize>,
+    /// File offset of the Rich header's `DanS` marker, if one was added.
+    pub rich_offset: Option<usize>,
+}
+
+/// Offset of the fixture Rich header (right after the 64-byte DOS header).
+pub const RICH_OFFSET: usize = 0x40;
+/// `"DanS"` as a little-endian dword.
+pub const DANS: u32 = 0x536E_6144;
+/// `"Rich"` as bytes.
+pub const RICH: &[u8; 4] = b"Rich";
+
+/// Rich header checksum: sum of the bytes before `DanS` rotated by their
+/// offset (skipping `e_lfanew`), plus each `comp_id` rotated by its count.
+pub fn rich_checksum(dos: &[u8], dans_offset: usize, entries: &[RichEntry]) -> u32 {
+    let mut sum = dans_offset as u32;
+    for (i, &b) in dos[..dans_offset].iter().enumerate() {
+        if (0x3c..0x40).contains(&i) {
+            continue;
+        }
+        sum = sum.wrapping_add(u32::from(b).rotate_left(i as u32 & 0x1f));
+    }
+    for &(product, build, count) in entries {
+        let comp_id = (u32::from(product) << 16) | u32::from(build);
+        sum = sum.wrapping_add(comp_id.rotate_left(count & 0x1f));
+    }
+    sum
+}
+
+fn write_rich(f: &mut [u8], entries: &[RichEntry]) {
+    let key = rich_checksum(f, RICH_OFFSET, entries);
+    let mut at = RICH_OFFSET;
+    for v in [DANS, 0, 0, 0] {
+        put_u32(f, at, v ^ key);
+        at += 4;
+    }
+    for &(product, build, count) in entries {
+        put_u32(f, at, ((u32::from(product) << 16) | u32::from(build)) ^ key);
+        put_u32(f, at + 4, count ^ key);
+        at += 8;
+    }
+    f[at..at + 4].copy_from_slice(RICH);
+    put_u32(f, at + 4, key);
 }
 
 impl Layout {

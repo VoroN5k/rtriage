@@ -243,3 +243,77 @@ fn dump_imphash_vectors() {
         std::fs::write(format!("{dir}/{name}.bin"), b.build().bytes).unwrap();
     }
 }
+
+#[test]
+fn rich_header_parses_with_goblin() {
+    let entries = [
+        (0x0104, 30_795, 12),
+        (0x0105, 30_795, 3),
+        (0x0093, 30_729, 1),
+    ];
+    let built = PeBuilder::minimal(Arch::X64).rich_header(&entries).build();
+    let pe = PE::parse(&built.bytes).unwrap();
+    let rich = pe.header.rich_header.unwrap();
+    let got: Vec<(u16, u16, u32)> = rich
+        .metadatas()
+        .map(|m| {
+            let m = m.unwrap();
+            (m.product, m.build, m.use_count)
+        })
+        .collect();
+    assert_eq!(got, entries);
+    assert_eq!(
+        rich.key,
+        rtriage_fixtures::pe::rich_checksum(&built.bytes, 0x40, &entries)
+    );
+}
+
+#[test]
+fn exports_and_forwarders_parse_with_goblin() {
+    use rtriage_fixtures::pe::ExportSpec;
+    for arch in [Arch::X86, Arch::X64] {
+        let built = PeBuilder::minimal(arch)
+            .dll(true)
+            .exports(
+                "helper.dll",
+                vec![
+                    ExportSpec::named("Zeta"),
+                    ExportSpec::named("Alpha"),
+                    ExportSpec::ordinal_only(),
+                    ExportSpec::forward("OpenFile", "KERNEL32.CreateFileW"),
+                ],
+            )
+            .build();
+        let pe = PE::parse(&built.bytes).unwrap();
+        assert_eq!(pe.name, Some("helper.dll"));
+        let mut names: Vec<_> = pe.exports.iter().filter_map(|e| e.name).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["Alpha", "OpenFile", "Zeta"]);
+        let fwd = pe
+            .exports
+            .iter()
+            .find(|e| e.name == Some("OpenFile"))
+            .unwrap();
+        assert!(fwd.reexport.is_some());
+    }
+}
+
+#[test]
+fn resources_parse_with_goblin() {
+    use rtriage_fixtures::pe::{ResId, ResourceSpec};
+    let built = PeBuilder::minimal(Arch::X64)
+        .resource(ResourceSpec::new(10, 101, b"payload".to_vec()))
+        .resource(ResourceSpec::new(10, 102, b"second".to_vec()))
+        .resource(ResourceSpec::new(24, 1, b"<assembly/>".to_vec()))
+        .resource(ResourceSpec {
+            type_id: ResId::Name("CONFIG".into()),
+            name: ResId::Id(1),
+            lang: 0,
+            data: b"k=v".to_vec(),
+        })
+        .build();
+    let pe = PE::parse(&built.bytes).unwrap();
+    let res = pe.resource_data.unwrap();
+    // Three types at the root: "CONFIG", RT_RCDATA (10), RT_MANIFEST (24).
+    assert_eq!(res.count(), 3);
+}

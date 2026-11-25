@@ -1,0 +1,48 @@
+---
+source: crates/rtriage-cli/src/output/text.rs
+expression: "render_string(&Run { reports: vec![report], failures: vec![], }, PLAIN)"
+---
+helper.dll
+  Type     PE                         Size  3 168 bytes (3.1 KiB)
+  MD5      0759ef86ddc561ec226fd86fa92bfe1b
+  SHA-1    cda1561fcd704bdeca7cafe9f97f3b2e3d15a3da
+  SHA-256  2dd1637b299c77796d86ba52eb826a4c121709a0070d9294dec01fa5c37b5ba9
+  Risk     [CLEAN-LOOKING] score 0
+
+Findings
+  (none)
+
+PE
+  Machine      amd64 (64-bit), dll, windows_cui
+  Entry point  0x00001000 in #0 ".text"
+  Image base   0x140000000
+  Timestamp    0x5f5e1000 (2020-09-13T12:26:40Z)
+  Checksum     0x00000000 (not set; computed 0x00001c40)
+  DLL flags    high_entropy_va, dynamic_base, nx_compat, terminal_server_aware
+  Rich         2 records, checksum valid
+  Signature    signed (unverified), 1 certificate entry
+
+Sections
+    #  Name         VirtAddr   VirtSize    RawSize  Perm Entropy
+    0  .text          0x1000       0x40      0x200  r-x    0.544
+    1  .data          0x2000       0x20      0x200  rw-    0.000
+    2  .rdata         0x3000      0x349      0x400  r--    2.719
+
+Imports  11 functions from 1 libraries, imphash f2a33574801c2e1455880e3be2822727
+  KERNEL32.dll           11  ExitProcess, GetModuleHandleW, GetProcessHeap, HeapAlloc, HeapFree, GetLastError, CloseHandle, WriteFile, +3 more
+
+Exports  helper.dll, 3 exports (1 forwarded)
+  #1     Init
+  #2     Run
+  #3     OpenFile -> KERNEL32.CreateFileW
+
+Resources  2 entries
+  RT_VERSION       #1          1033       92 B       -
+  RT_MANIFEST      #2          1033       33 B       -
+
+Entropy
+  Whole file  2.274 bits/byte
+  No high-entropy regions (>= 7.20, window 4096)
+
+Strings  21 found (ASCII + UTF-16LE, min 5), 0 classified
+  (no classified strings; use --all-strings to list all)

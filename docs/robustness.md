@@ -14,6 +14,12 @@ analyzer. This document lists the defences and where they live.
 | `max_import_libraries` | 4096 | Import descriptors per file. |
 | `max_tls_callbacks` | 256 | TLS callback array entries. |
 | `max_debug_entries` | 64 | Debug directory entries (CodeView records are capped at 1 KiB). |
+| `max_exports` | 65 536 | `NumberOfFunctions` and `NumberOfNames` are each capped; every export array must map contiguously into one section. |
+| `max_resources` | 4096 | Resource leaves. The walk is fixed at depth 3 and visits each directory offset once, so cycles and shared subdirectories cannot loop or multiply work. |
+| `max_certificates` | 16 | `WIN_CERTIFICATE` entries; zero or oversized lengths stop the walk. |
+
+The Rich header search is limited to the first 4 KiB, whatever `e_lfanew`
+claims.
 | `max_exports` | 65 536 | Export entries. |
 | `max_strings` | 200 000 | Strings kept (the rest are only counted). |
 | `max_string_len` | 4096 | Characters copied per string. |

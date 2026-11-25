@@ -8,7 +8,9 @@ use std::collections::BTreeMap;
 use std::io::{self, Write};
 
 use anstyle::{AnsiColor, Style};
-use rtriage_core::report::{AnalysisLimit, Reduction};
+use rtriage_core::report::{
+    AnalysisLimit, PeExportsFacts, PeResourcesFacts, Reduction, SignatureStatus,
+};
 use rtriage_core::report::{
     EntropyFacts, ExtractedString, PeImportsFacts, PeSectionFacts, StringEncoding, StringKind,
     StringsFacts,
@@ -72,6 +74,12 @@ fn render_report(
     }
     if let Some(i) = r.facts.pe.as_ref().and_then(|pe| pe.imports.as_ref()) {
         render_pe_imports(i, out, p)?;
+    }
+    if let Some(e) = r.facts.pe.as_ref().and_then(|pe| pe.exports.as_ref()) {
+        render_pe_exports(e, out, p)?;
+    }
+    if let Some(res) = r.facts.pe.as_ref().and_then(|pe| pe.resources.as_ref()) {
+        render_pe_resources(res, out, p)?;
     }
     if let Some(e) = &r.facts.entropy {
         render_entropy(e, out, p)?;
@@ -517,6 +525,110 @@ fn render_pe_extras(pe: &PeFacts, out: &mut dyn Write) -> io::Result<()> {
     if let Some(d) = &pe.debug {
         writeln!(out, "  PDB          {}", sanitize(&d.pdb_path))?;
     }
+    if let Some(r) = &pe.rich {
+        writeln!(
+            out,
+            "  Rich         {} records, checksum {}",
+            r.entries.len(),
+            if r.checksum_valid {
+                "valid".to_owned()
+            } else {
+                format!(
+                    "INVALID (stored 0x{:08x}, computed 0x{:08x})",
+                    r.key, r.computed_checksum
+                )
+            }
+        )?;
+    }
+    if let Some(s) = &pe.signature {
+        match s.status {
+            SignatureStatus::SignedUnverified => writeln!(
+                out,
+                "  Signature    signed (unverified), {} certificate entr{}",
+                s.certificates.len(),
+                if s.certificates.len() == 1 {
+                    "y"
+                } else {
+                    "ies"
+                }
+            )?,
+            _ => writeln!(
+                out,
+                "  Signature    MALFORMED: {}",
+                sanitize(&s.problems.join("; "))
+            )?,
+        }
+    }
+    Ok(())
+}
+
+/// Exports listed before "+N more".
+const EXPORTS_SHOWN: usize = 20;
+/// Resources listed before "+N more".
+const RESOURCES_SHOWN: usize = 30;
+
+fn render_pe_exports(e: &PeExportsFacts, out: &mut dyn Write, p: &Painter) -> io::Result<()> {
+    let forwarded = e.exports.iter().filter(|x| x.forwarder.is_some()).count();
+    writeln!(
+        out,
+        "\n{}  {}, {} exports ({} forwarded){}",
+        p.heading("Exports"),
+        e.dll_name
+            .as_deref()
+            .map_or_else(|| "(no name)".into(), sanitize),
+        e.exports.len(),
+        forwarded,
+        if e.limit_reached {
+            ", limit reached"
+        } else {
+            ""
+        }
+    )?;
+    for x in e.exports.iter().take(EXPORTS_SHOWN) {
+        let name = x
+            .name
+            .as_deref()
+            .map_or_else(|| "(ordinal only)".into(), sanitize);
+        match &x.forwarder {
+            Some(f) => writeln!(out, "  #{:<5} {name} -> {}", x.ordinal, sanitize(f))?,
+            None => writeln!(out, "  #{:<5} {name}", x.ordinal)?,
+        }
+    }
+    if e.exports.len() > EXPORTS_SHOWN {
+        writeln!(out, "  +{} more", e.exports.len() - EXPORTS_SHOWN)?;
+    }
+    Ok(())
+}
+
+fn render_pe_resources(r: &PeResourcesFacts, out: &mut dyn Write, p: &Painter) -> io::Result<()> {
+    writeln!(
+        out,
+        "\n{}  {} entries{}",
+        p.heading("Resources"),
+        r.entries.len(),
+        if r.limit_reached {
+            ", limit reached"
+        } else {
+            ""
+        }
+    )?;
+    for e in r.entries.iter().take(RESOURCES_SHOWN) {
+        let entropy = e
+            .entropy
+            .map_or_else(|| "      -".to_owned(), |v| format!("{v:>7.3}"));
+        let line = format!(
+            "  {:<16} {:<10} {:>5} {:>10} {entropy}  {}",
+            sanitize(&e.type_name),
+            sanitize(&e.name),
+            e.lang,
+            short_size(u64::from(e.size)),
+            e.kind.unwrap_or("")
+        );
+        writeln!(out, "{}", line.trim_end())?;
+    }
+    if r.entries.len() > RESOURCES_SHOWN {
+        writeln!(out, "  +{} more", r.entries.len() - RESOURCES_SHOWN)?;
+    }
     Ok(())
 }
 
@@ -826,6 +938,59 @@ mod tests {
                 explain: true,
                 ..PLAIN
             }
+        ));
+    }
+
+    #[test]
+    fn snapshot_signed_dll() {
+        use rtriage_fixtures::pe::{Arch, ExportSpec, PeBuilder, ResourceSpec};
+        let mut pkcs7 = vec![0x30, 0x82, 0x05, 0x00, 0x06, 0x09];
+        pkcs7.extend_from_slice(&[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x02]);
+        pkcs7.resize(600, 0x41);
+        let built = PeBuilder::minimal(Arch::X64)
+            .dll(true)
+            .rich_header(&[(0x0104, 30_795, 12), (0x0105, 30_795, 3)])
+            .import(
+                "KERNEL32.dll",
+                &[
+                    "ExitProcess",
+                    "GetModuleHandleW",
+                    "GetProcessHeap",
+                    "HeapAlloc",
+                    "HeapFree",
+                    "GetLastError",
+                    "CloseHandle",
+                    "WriteFile",
+                    "GetStdHandle",
+                    "SetLastError",
+                    "QueryPerformanceCounter",
+                ],
+            )
+            .exports(
+                "helper.dll",
+                vec![
+                    ExportSpec::named("Init"),
+                    ExportSpec::named("Run"),
+                    ExportSpec::forward("OpenFile", "KERNEL32.CreateFileW"),
+                ],
+            )
+            .resource(ResourceSpec::new(
+                24,
+                2,
+                b"<assembly manifestVersion='1.0'/>".to_vec(),
+            ))
+            .resource(ResourceSpec::new(16, 1, vec![0u8; 92]))
+            .certificate(pkcs7)
+            .build();
+        let input = Input::from_bytes("helper.dll", built.bytes);
+        let mut report = Registry::default().analyze(&input, &Config::default());
+        prepare(&mut report, false, rtriage_core::Severity::Info);
+        insta::assert_snapshot!(render_string(
+            &Run {
+                reports: vec![report],
+                failures: vec![],
+            },
+            PLAIN
         ));
     }
 
