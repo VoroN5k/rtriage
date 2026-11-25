@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::io::{self, Write};
 
 use anstyle::{AnsiColor, Style};
+use rtriage_core::analyzers::iocs::defang_text;
 use rtriage_core::report::{
     AnalysisLimit, ElfFacts, ElfHeaderFacts, ExplainerKind, PeExportsFacts, PeResourcesFacts,
     Reduction, SignatureStatus,
@@ -16,6 +17,7 @@ use rtriage_core::report::{
     EntropyFacts, ExtractedString, PeImportsFacts, PeSectionFacts, StringEncoding, StringKind,
     StringsFacts,
 };
+use rtriage_core::report::{Ioc, IocFacts, IocKind};
 use rtriage_core::{
     Evidence, Finding, Format, PeFacts, PeHeaderFacts, Report, Risk, RiskLevel, Severity,
 };
@@ -39,11 +41,16 @@ pub struct TextOptions {
     pub all_strings: bool,
     /// Print the score breakdown.
     pub explain: bool,
+    /// Defang URLs, domains, IPs and emails in IOCs, evidence and strings.
+    pub defang: bool,
 }
 
 /// Writes `run` as text.
 pub fn render(run: &Run, out: &mut dyn Write, opts: TextOptions) -> io::Result<()> {
-    let p = Painter { color: opts.color };
+    let p = Painter {
+        color: opts.color,
+        defang: opts.defang,
+    };
     for (i, report) in run.reports.iter().enumerate() {
         if i > 0 {
             writeln!(out, "\n{RULE}\n")?;
@@ -91,6 +98,9 @@ fn render_report(
     }
     if let Some(e) = &r.facts.entropy {
         render_entropy(e, out, p)?;
+    }
+    if let Some(i) = &r.facts.iocs {
+        render_iocs(i, out, p)?;
     }
     if let Some(s) = &r.facts.strings {
         render_strings(s, out, p, opts.all_strings)?;
@@ -221,7 +231,7 @@ fn render_findings(findings: &[Finding], out: &mut dyn Write, p: &Painter) -> io
             writeln!(out, "      {}", sanitize(&f.detail))?;
         }
         for e in &f.evidence {
-            writeln!(out, "      - {}", evidence(e))?;
+            writeln!(out, "      - {}", evidence(e, p))?;
         }
         if !f.attack.is_empty() {
             writeln!(out, "      ATT&CK: {}", f.attack.join(", "))?;
@@ -268,6 +278,72 @@ fn render_entropy(e: &EntropyFacts, out: &mut dyn Write, p: &Painter) -> io::Res
     Ok(())
 }
 
+fn render_iocs(iocs: &IocFacts, out: &mut dyn Write, p: &Painter) -> io::Result<()> {
+    let shown: Vec<&Ioc> = iocs.items.iter().filter(|i| !i.allowlisted).collect();
+    let mut notes = Vec::new();
+    if iocs.allowlisted > 0 {
+        notes.push(format!(
+            "{} allowlisted, hidden (see JSON)",
+            iocs.allowlisted
+        ));
+    }
+    if iocs.limit_reached {
+        notes.push("limit reached".to_owned());
+    }
+    writeln!(
+        out,
+        "\n{}  {}{}",
+        p.heading("IOCs"),
+        group_digits(iocs.items.len() as u64),
+        if notes.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", notes.join(", "))
+        }
+    )?;
+    if shown.is_empty() {
+        return writeln!(out, "  (none)");
+    }
+    let mut groups: BTreeMap<IocKind, Vec<&Ioc>> = BTreeMap::new();
+    for i in shown {
+        groups.entry(i.kind).or_default().push(i);
+    }
+    for (kind, items) in &groups {
+        let name = enum_name(kind);
+        for i in items.iter().take(STRINGS_PER_KIND) {
+            let value = if p.defang {
+                &i.value_defanged
+            } else {
+                &i.value
+            };
+            let value: String = value.chars().take(MAX_VALUE_CHARS).collect();
+            let scope = i
+                .scope
+                .map(|s| format!("  ({})", enum_name(&s)))
+                .unwrap_or_default();
+            let first = i
+                .offsets
+                .first()
+                .map(|o| format!("  @0x{o:08x}"))
+                .unwrap_or_default();
+            let count = if i.count > 1 {
+                format!("  x{}", i.count)
+            } else {
+                String::new()
+            };
+            writeln!(
+                out,
+                "  {name:<13} {}{scope}{count}{first}",
+                sanitize(&value)
+            )?;
+        }
+        if items.len() > STRINGS_PER_KIND {
+            writeln!(out, "  {name:<13} +{} more", items.len() - STRINGS_PER_KIND)?;
+        }
+    }
+    Ok(())
+}
+
 fn render_strings(s: &StringsFacts, out: &mut dyn Write, p: &Painter, all: bool) -> io::Result<()> {
     let classified = s.items.iter().filter(|i| !i.kinds.is_empty()).count();
     writeln!(
@@ -295,7 +371,7 @@ fn render_strings(s: &StringsFacts, out: &mut dyn Write, p: &Painter, all: bool)
                 .map(enum_name)
                 .collect::<Vec<_>>()
                 .join(",");
-            string_line(out, if kinds.is_empty() { "-" } else { &kinds }, item)?;
+            string_line(out, if kinds.is_empty() { "-" } else { &kinds }, item, p)?;
         }
         return Ok(());
     }
@@ -316,7 +392,7 @@ fn render_strings(s: &StringsFacts, out: &mut dyn Write, p: &Painter, all: bool)
     for (kind, items) in &groups {
         let name = enum_name(kind);
         for item in items.iter().take(STRINGS_PER_KIND) {
-            string_line(out, &name, item)?;
+            string_line(out, &name, item, p)?;
         }
         if items.len() > STRINGS_PER_KIND {
             writeln!(
@@ -330,7 +406,12 @@ fn render_strings(s: &StringsFacts, out: &mut dyn Write, p: &Painter, all: bool)
     Ok(())
 }
 
-fn string_line(out: &mut dyn Write, kind: &str, s: &ExtractedString) -> io::Result<()> {
+fn string_line(
+    out: &mut dyn Write,
+    kind: &str,
+    s: &ExtractedString,
+    p: &Painter,
+) -> io::Result<()> {
     let enc = match s.encoding {
         StringEncoding::Ascii => 'A',
         StringEncoding::Utf16Le => 'W',
@@ -341,7 +422,7 @@ fn string_line(out: &mut dyn Write, kind: &str, s: &ExtractedString) -> io::Resu
         kind,
         s.offset,
         enc,
-        shorten(&s.value, s.len)
+        shorten(&s.value, s.len, p)
     )
 }
 
@@ -369,9 +450,19 @@ fn render_failures(
 /// Applies styles only when color is enabled.
 struct Painter {
     color: bool,
+    defang: bool,
 }
 
 impl Painter {
+    /// File-derived text for display: defanged if requested, then sanitized.
+    fn untrusted(&self, s: &str) -> String {
+        if self.defang {
+            sanitize(&defang_text(s)).into_owned()
+        } else {
+            sanitize(s).into_owned()
+        }
+    }
+
     fn paint(&self, style: Style, text: &str) -> String {
         if self.color {
             format!("{}{text}{}", style.render(), style.render_reset())
@@ -844,7 +935,7 @@ fn format_name(f: Format) -> &'static str {
     }
 }
 
-fn evidence(e: &Evidence) -> String {
+fn evidence(e: &Evidence, p: &Painter) -> String {
     match e {
         Evidence::Range { offset, len } => format!("range 0x{offset:08x} (+{len} bytes)"),
         Evidence::Section { index, name } => format!("section #{index} \"{}\"", sanitize(name)),
@@ -859,10 +950,10 @@ fn evidence(e: &Evidence) -> String {
         } => format!(
             "string 0x{offset:08x} {} \"{}\"",
             enum_name(encoding),
-            sanitize(value)
+            p.untrusted(value)
         ),
         Evidence::Metric { name, value } => format!("{name} = {value:.3}"),
-        Evidence::Field { name, value } => format!("{name} = {}", sanitize(value)),
+        Evidence::Field { name, value } => format!("{name} = {}", p.untrusted(value)),
         _ => "(unsupported evidence type)".to_owned(),
     }
 }
@@ -876,10 +967,10 @@ fn enum_name<T: Serialize>(v: &T) -> String {
 }
 
 /// Sanitized value, cut to [`MAX_VALUE_CHARS`] with a note of the full length.
-fn shorten(value: &str, full_len: u64) -> String {
+fn shorten(value: &str, full_len: u64, p: &Painter) -> String {
     let shown: String = value.chars().take(MAX_VALUE_CHARS).collect();
     let cut = full_len > MAX_VALUE_CHARS as u64;
-    let clean = sanitize(&shown).into_owned();
+    let clean = p.untrusted(&shown);
     if cut {
         format!("{clean} [... {} chars total]", group_digits(full_len))
     } else {
@@ -995,6 +1086,7 @@ mod tests {
     }
 
     const PLAIN: TextOptions = TextOptions {
+        defang: false,
         color: false,
         all_strings: false,
         explain: false,
@@ -1220,8 +1312,40 @@ mod tests {
     #[test]
     fn long_values_are_shortened() {
         let v = "A".repeat(300);
-        let s = shorten(&v, 300);
+        let p = Painter {
+            color: false,
+            defang: false,
+        };
+        let s = shorten(&v, 300, &p);
         assert!(s.starts_with(&"A".repeat(MAX_VALUE_CHARS)));
         assert!(s.ends_with("[... 300 chars total]"));
+    }
+
+    #[test]
+    fn evidence_is_defanged_only_on_request() {
+        let e = Evidence::String {
+            offset: 0x40,
+            encoding: StringEncoding::Ascii,
+            value: "beacon http://evil.com/gate.php 45.13.227.8\x1b[2J".into(),
+        };
+        let raw = Painter {
+            color: false,
+            defang: false,
+        };
+        let safe = Painter {
+            color: false,
+            defang: true,
+        };
+        let plain = evidence(&e, &raw);
+        assert!(plain.contains("http://evil.com/gate.php 45.13.227.8"));
+        let defanged = evidence(&e, &safe);
+        assert!(defanged.contains("hxxp://evil[.]com/gate.php 45[.]13[.]227[.]8"));
+        // Defanging never bypasses sanitizing.
+        assert!(!defanged.contains('\x1b'));
+        let f = Evidence::Field {
+            name: "pdb",
+            value: "see https://evil.top".into(),
+        };
+        assert_eq!(evidence(&f, &safe), "pdb = see hxxps://evil[.]top");
     }
 }

@@ -245,3 +245,37 @@ fn explain_prints_breakdown_in_text() {
     assert!(text.contains("explained by UPX"));
     assert!(text.contains("[PACKED: analysis limited]"));
 }
+
+#[test]
+fn defang_changes_text_but_not_json() {
+    let f = scratch(
+        "defang.bin",
+        b"\0\0beacon to http://c2.evil.top/gate 45.13.227.8\0\0",
+    );
+    let path = f.to_str().unwrap();
+    let text = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_rtriage"))
+            .args(args)
+            .env("NO_COLOR", "1")
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let raw = text(&[path]);
+    assert!(raw.contains("http://c2.evil.top/gate"));
+    let safe = text(&["--defang", path]);
+    assert!(safe.contains("hxxp://c2[.]evil[.]top/gate"));
+    assert!(safe.contains("45[.]13[.]227[.]8"));
+    assert!(!safe.contains("http://c2.evil.top"));
+    // JSON keeps the raw value and always carries the defanged one.
+    let v = json(&rtriage(&["--defang", path]));
+    let items = &v["reports"][0]["facts"]["iocs"]["items"];
+    let url = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["kind"] == "url")
+        .unwrap();
+    assert_eq!(url["value"], "http://c2.evil.top/gate");
+    assert_eq!(url["value_defanged"], "hxxp://c2[.]evil[.]top/gate");
+}

@@ -167,6 +167,7 @@ fn render(cli: &Cli, run: &Run, out: &mut dyn Write, color: bool) -> io::Result<
                 color,
                 all_strings: cli.all_strings,
                 explain: cli.explain,
+                defang: cli.defang,
             },
         ),
         OutputFormat::Json => output::json::render(run, out),

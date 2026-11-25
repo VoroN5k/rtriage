@@ -53,5 +53,8 @@ Entropy
   Whole file  0.432 bits/byte
   No high-entropy regions (>= 7.20, window 4096)
 
+IOCs  0
+  (none)
+
 Strings  10 found (ASCII + UTF-16LE, min 5), 1 classified
   file_path          0x000001c8  A  /tmp/.x/ld-linux-x86-64.so.2

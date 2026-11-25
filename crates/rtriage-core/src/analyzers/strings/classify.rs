@@ -10,7 +10,22 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::report::StringKind;
+use crate::report::{IocKind, StringKind};
+
+/// Characters trimmed from the end of a URL match (sentence punctuation,
+/// closing quotes/brackets around a URL in text).
+const TRAILING_PUNCT: &[char] = &['.', ',', ';', ':', '!', '?', ')', ']', '}', '\'', '"'];
+
+/// A byte range of `s` that looks like an IOC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IocSpan {
+    /// Start byte.
+    pub start: usize,
+    /// End byte (exclusive).
+    pub end: usize,
+    /// What it looks like.
+    pub kind: IocKind,
+}
 
 /// Compiled patterns, or the compile error (a bug, covered by tests).
 static CLASSIFIER: LazyLock<Result<Classifier, regex::Error>> = LazyLock::new(Classifier::new);
@@ -30,6 +45,7 @@ const TLDS: &str = "com|net|org|info|biz|io|co|me|tv|cc|ws|ru|su|cn|ua|de|uk|fr|
 #[derive(Debug)]
 pub struct Classifier {
     url: Regex,
+    url_full: Regex,
     ipv4: Regex,
     ipv6: Regex,
     domain: Regex,
@@ -46,6 +62,14 @@ impl Classifier {
     fn new() -> Result<Self, regex::Error> {
         Ok(Self {
             url: Regex::new(r"(?i)\b(?:https?|ftp|wss?)://[a-z0-9\-._~%]+(?::\d{1,5})?")?,
+            // Host may be a bracketed IPv6 literal or carry userinfo; the
+            // path stops at whitespace, quotes, angle brackets and controls.
+            url_full: Regex::new(concat!(
+                r"(?i)\b(?:https?|ftp|wss?)://",
+                r"(?:[a-z0-9\-._~%!$&'()*+,;=:]*@)?",
+                r"(?:\[[0-9a-f:.]+\]|[a-z0-9\-._~%]+)(?::\d{1,5})?",
+                r#"(?:[/?#][^\s"'<>\\^`{|}\x00-\x1f\x7f]*)?"#
+            ))?,
             ipv4: Regex::new(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")?,
             ipv6: Regex::new(r"(?i)[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}")?,
             domain: Regex::new(&format!(
@@ -115,6 +139,71 @@ impl Classifier {
             .into_iter()
             .filter_map(|(kind, hit)| hit.then_some(kind))
             .collect()
+    }
+
+    /// Non-overlapping IOC-like matches in `s`, by start offset (byte ranges
+    /// into `s`). Overlaps resolve by priority URL > email > IPv6 > IPv4 >
+    /// domain > wallet, so `user@evil.com` is one email, not also a domain.
+    /// URLs include their path; trailing punctuation is trimmed.
+    pub fn ioc_spans(&self, s: &str) -> Vec<IocSpan> {
+        let mut cands: Vec<IocSpan> = Vec::new();
+        let mut push = |start: usize, end: usize, kind: IocKind| {
+            cands.push(IocSpan { start, end, kind });
+        };
+        for m in self.url_full.find_iter(s) {
+            let trimmed = m.as_str().trim_end_matches(TRAILING_PUNCT);
+            if trimmed.contains("://") && !trimmed.ends_with("://") {
+                push(m.start(), m.start() + trimmed.len(), IocKind::Url);
+            }
+        }
+        for m in self.email.find_iter(s) {
+            push(m.start(), m.end(), IocKind::Email);
+        }
+        for m in self.ipv6.find_iter(s) {
+            let c = m.as_str();
+            let groups = c.split(':').filter(|g| !g.is_empty()).count();
+            if groups >= 3 && c.parse::<Ipv6Addr>().is_ok() {
+                push(m.start(), m.end(), IocKind::Ipv6);
+            }
+        }
+        if !s.to_ascii_lowercase().contains("version") {
+            for m in self.ipv4.find_iter(s) {
+                if self.ipv4_standalone(s, m.start(), m.end()) {
+                    push(m.start(), m.end(), IocKind::Ipv4);
+                }
+            }
+        }
+        for m in self.domain.find_iter(s) {
+            push(m.start(), m.end(), IocKind::Domain);
+        }
+        for m in self.wallet.find_iter(s) {
+            push(m.start(), m.end(), IocKind::CryptoWallet);
+        }
+        // Highest priority first, then leftmost, then longest; accept what
+        // does not overlap anything already accepted.
+        cands.sort_by_key(|c| (c.kind.priority(), c.start, std::cmp::Reverse(c.end)));
+        let mut out: Vec<IocSpan> = Vec::new();
+        for c in cands {
+            if !out.iter().any(|o| c.start < o.end && o.start < c.end) {
+                out.push(c);
+            }
+        }
+        out.sort_by_key(|c| c.start);
+        out
+    }
+
+    /// See [`Classifier::has_ipv4`]: valid quad, not glued into a longer dotted number.
+    fn ipv4_standalone(&self, s: &str, start: usize, end: usize) -> bool {
+        let before = s.get(..start).unwrap_or_default();
+        let after = s.get(end..).unwrap_or_default();
+        let glued_before = before.ends_with('.');
+        let glued_after = after
+            .strip_prefix('.')
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
+        !glued_before
+            && !glued_after
+            && s.get(start..end)
+                .is_some_and(|q| q.parse::<Ipv4Addr>().is_ok())
     }
 
     /// Valid dotted quad that is not part of a longer dotted number

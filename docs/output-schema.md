@@ -73,6 +73,25 @@ Every member is `null` if its analyzer did not run.
 
 **`runtime`** (any format; `null` unless at least two independent`nindicators agree): `{ language, version, indicators }`. `language` is`n`go` or `rust`; `version` is e.g. `go1.22.5` or `rustc <commit>`, or`n`null`. Indicators: Go `go_buildinfo`, `go_build_id`, `go_sections`,`n`go_runtime_strings`; Rust `rustc_path`, `panic_messages`,`n`mangled_symbols`.
 
+**`iocs`** (any format; `null` if the analyzer did not run)
+
+| Field | Type | Description |
+|---|---|---|
+| `items` | array | Deduplicated IOCs sorted by `kind`, then `value`. See below. |
+| `limit_reached` | bool | `true` if more than `max_iocs` (10 000) distinct IOCs were found. |
+| `allowlisted` | integer | How many `items` are allowlisted. |
+
+IOC item: `kind` (`url` \| `email` \| `ipv6` \| `ipv4` \| `domain` \|
+`crypto_wallet`), `value` (normalized raw value, **never defanged**;
+sanitize before displaying), `value_defanged` (always present, independent
+of `--defang`; equal to `value` for wallets), `scope` (IPs only, else
+`null`: `public`, `private`, `loopback`, `link_local`, `multicast`,
+`broadcast`, `unspecified`, `documentation`, `shared`, `reserved`),
+`allowlisted` (bool), `count` (occurrences), `offsets` (offsets of the
+containing strings, first 8, ascending).
+
+`--defang` changes only the text output; JSON is identical with or without it.
+
 **`pe`** (non-PE input: `null`). Each part is `null` if its analyzer failed.
 
 `pe.headers`:

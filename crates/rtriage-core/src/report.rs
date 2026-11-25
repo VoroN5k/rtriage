@@ -59,6 +59,9 @@ pub struct Facts {
     pub elf: Option<ElfFacts>,
     /// Language runtime (Go, Rust), any format; `None` if not recognised.
     pub runtime: Option<RuntimeFacts>,
+    /// Indicators of compromise extracted from strings; `None` until the
+    /// IOC analyzer has run.
+    pub iocs: Option<IocFacts>,
 }
 
 /// ELF facts; each part is filled by its own analyzer.
@@ -664,6 +667,88 @@ pub enum StringKind {
     CryptoWallet,
     /// HTTP user-agent string.
     UserAgent,
+}
+
+/// Deduplicated, normalized indicators of compromise.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct IocFacts {
+    /// Sorted by kind, then value.
+    pub items: Vec<Ioc>,
+    /// `true` if more than `max_iocs` distinct IOCs were found.
+    pub limit_reached: bool,
+    /// How many of `items` are allowlisted.
+    pub allowlisted: u64,
+}
+
+/// One indicator of compromise.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Ioc {
+    /// What it is.
+    pub kind: IocKind,
+    /// Normalized raw value (never defanged; **sanitize before displaying**).
+    pub value: String,
+    /// The same value defanged (`hxxp://`, `1[.]2[.]3[.]4`, ...).
+    pub value_defanged: String,
+    /// Address scope, IPs only.
+    pub scope: Option<IpScope>,
+    /// Matches `rules/ioc_allowlist.toml` (well-known benign infrastructure).
+    pub allowlisted: bool,
+    /// Occurrences across all strings.
+    pub count: u64,
+    /// Offsets of the strings containing it (first few, ascending).
+    pub offsets: Vec<u64>,
+}
+
+/// Scope of an IP address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IpScope {
+    /// Globally routable.
+    Public,
+    /// RFC 1918 / IPv6 unique local.
+    Private,
+    /// `127.0.0.0/8`, `::1`.
+    Loopback,
+    /// `169.254.0.0/16`, `fe80::/10`.
+    LinkLocal,
+    /// `224.0.0.0/4`, `ff00::/8`.
+    Multicast,
+    /// `255.255.255.255`.
+    Broadcast,
+    /// `0.0.0.0`, `::`.
+    Unspecified,
+    /// RFC 5737 / RFC 3849 documentation ranges.
+    Documentation,
+    /// `100.64.0.0/10` (carrier-grade NAT).
+    Shared,
+    /// Other non-routable ranges (`0.0.0.0/8`, `198.18.0.0/15`, `240.0.0.0/4`).
+    Reserved,
+}
+
+/// Kind of indicator of compromise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum IocKind {
+    /// URL with scheme, host and path.
+    Url,
+    /// Email address.
+    Email,
+    /// IPv6 address.
+    Ipv6,
+    /// IPv4 address.
+    Ipv4,
+    /// Domain name.
+    Domain,
+    /// Crypto-currency wallet address.
+    CryptoWallet,
+}
+
+impl IocKind {
+    /// Overlap priority, lower wins (declaration order).
+    pub fn priority(self) -> u8 {
+        self as u8
+    }
 }
 
 /// Shannon entropy summary of the whole file.

@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
+use crate::analyzers::iocs::IocAllowlist;
 use crate::limits::Limits;
 use crate::rules::{ApiRuleSet, PackerRuleSet};
 
@@ -26,6 +27,9 @@ pub struct Config {
     /// ELF API behavior rules; `None` = the bundled `rules/elf_api_groups.toml`.
     #[serde(skip)]
     pub elf_api_rules: Option<Arc<ApiRuleSet>>,
+    /// IOC allowlist; `None` = the bundled `rules/ioc_allowlist.toml`.
+    #[serde(skip)]
+    pub ioc_allowlist: Option<Arc<IocAllowlist>>,
     /// Packer explanations; `None` = the bundled `rules/packers.toml`.
     #[serde(skip)]
     pub packer_rules: Option<Arc<PackerRuleSet>>,
@@ -47,6 +51,7 @@ impl Default for Config {
             strings_min_len: Self::DEFAULT_STRINGS_MIN_LEN,
             api_rules: None,
             elf_api_rules: None,
+            ioc_allowlist: None,
             packer_rules: None,
         }
     }

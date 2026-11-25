@@ -21,6 +21,10 @@ Entropy
   High-entropy regions (>= 7.20, window 4096):
     0x00000000..0x00002000     8.0 KiB  7.999
 
+IOCs  2
+  url           http://c2.example.ru/gate.php  @0x00000002
+  domain        c2.example.ru  @0x00000002
+
 Strings  35 found (ASCII + UTF-16LE, min 5), 2 classified
   url                0x00000002  A  http://c2.example.ru/gate.php
   registry_key       0x00000021  A  Software\Microsoft\Windows\CurrentVersion\Run

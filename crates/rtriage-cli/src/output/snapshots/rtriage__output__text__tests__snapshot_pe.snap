@@ -49,5 +49,8 @@ Entropy
   Whole file  0.932 bits/byte
   No high-entropy regions (>= 7.20, window 4096)
 
+IOCs  0
+  (none)
+
 Strings  7 found (ASCII + UTF-16LE, min 5), 0 classified
   (no classified strings; use --all-strings to list all)

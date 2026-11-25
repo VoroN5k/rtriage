@@ -110,5 +110,8 @@ Entropy
   High-entropy regions (>= 7.20, window 4096):
     0x00001000..0x00002000     4.0 KiB  8.000
 
+IOCs  0
+  (none)
+
 Strings  44 found (ASCII + UTF-16LE, min 5), 1 classified
   file_path          0x0000272c  A  C:\Users\dev\proj\Release\tool.pdb

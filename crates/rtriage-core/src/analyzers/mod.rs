@@ -11,6 +11,7 @@
 pub mod elf;
 pub mod entropy;
 pub mod hashes;
+pub mod iocs;
 pub mod pe;
 pub mod rule_engine;
 pub mod runtime;
@@ -187,6 +188,7 @@ impl Default for Registry {
             .with(hashes::HashesAnalyzer)
             .with(entropy::EntropyAnalyzer)
             .with(strings::StringsAnalyzer)
+            .with(iocs::IocAnalyzer)
             .with(pe::PeParseAnalyzer)
             .with(pe::headers::PeHeadersAnalyzer)
             .with(pe::sections::PeSectionsAnalyzer)
@@ -372,7 +374,7 @@ mod tests {
             Deadline::expired(),
         );
         let names: Vec<_> = report.errors.iter().map(|e| e.analyzer).collect();
-        assert_eq!(names, ["entropy", "hashes", "strings"]);
+        assert_eq!(names, ["entropy", "hashes", "iocs", "strings"]);
         assert!(report
             .errors
             .iter()

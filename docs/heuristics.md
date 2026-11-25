@@ -785,6 +785,48 @@ C program) records nothing.
 It never produces a finding, never touches API groups, and only explains the
 small findings listed under "Runtimes" above.
 
+### IOCs (`iocs` analyzer, any format)
+
+Facts only (`facts.iocs`): no finding IDs, no points. Behavior groups keep
+using string kinds directly.
+
+- **Source.** The shared extracted strings (so the `max_strings` and
+  `max_string_len` limits apply); only strings already classified as URL,
+  IP, domain, email or wallet are scanned again for exact matches.
+- **Matching and overlaps.** URLs include path/query (trailing `.,;:!?)]}'"`
+  trimmed). Overlapping matches resolve by priority URL > email > IPv6 >
+  IPv4 > domain > wallet, so `user@evil.com` is one email, and the domain
+  inside a URL is not counted twice. IPv4 keeps the classifier's rules (no
+  longer dotted numbers, no strings mentioning "version").
+- **Normalization.** Scheme and host lowercase; IPs in canonical form
+  (`::1`, no leading zeros); domains lowercase without a trailing dot; the
+  host of every URL is added as its own domain / IP IOC. Dedup on (kind,
+  normalized value); `count` and up to 8 string offsets per IOC.
+- **Wallets.** Legacy/P2SH Bitcoin addresses (`1...`, `3...`) must pass the
+  Base58Check checksum (random base58-looking identifiers otherwise flood
+  the list); bech32, Ethereum and Monero forms are shape-only.
+- **IP scope.** `public`, `private` (RFC 1918, `fc00::/7`), `loopback`,
+  `link_local`, `multicast`, `broadcast`, `unspecified`, `documentation`
+  (RFC 5737, `2001:db8::/32`), `shared` (`100.64.0.0/10`), `reserved`
+  (`0/8`, `198.18/15`, `240/4`, `192.0.0/24`). IPv4-mapped IPv6 uses the
+  IPv4 rules.
+- **Allowlist.** [`rules/ioc_allowlist.toml`](../rules/ioc_allowlist.toml):
+  domains (plus subdomains) of standards bodies, Windows platform, CAs and
+  toolchains. Allowlisted IOCs stay in JSON (`allowlisted: true`); text
+  output hides them behind a count. Code/file hosting (GitHub, Pastebin,
+  Discord, ...) is deliberately absent: malware abuses it. IPs are never
+  allowlisted. `Config::ioc_allowlist` replaces the bundled list.
+- **Defang.** `value_defanged` is always in JSON: `hxxp://`, `hxxps://`,
+  `fxp://`, dots in hosts/domains/IPv4 as `[.]`, IPv6 colons as `[:]`,
+  emails as `user[@]evil[.]com`. `--defang` applies the same to IOCs,
+  evidence values and strings in **text** output (defang first, then
+  sanitize).
+- **Limits.** `max_iocs` (10 000) distinct IOCs, deadline checked every 256
+  strings.
+- **False positives.** Domain matching needs a whitelisted TLD, so
+  `kernel32.dll`, `setup.exe` and .NET namespaces are not domains; Go module
+  paths (`golang.org/x/...`) are allowlisted.
+
 ### Facts that suppress heuristics
 
 - `facts.pe.headers.managed_dotnet`: set when the CLR (COM descriptor) data

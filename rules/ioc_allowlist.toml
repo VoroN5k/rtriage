@@ -1,0 +1,51 @@
+# rtriage IOC allowlist: well-known benign infrastructure.
+#
+# Allowlisted IOCs are NOT removed: they stay in JSON with
+# `allowlisted: true`; the text output hides them behind a count. Nothing
+# here affects scoring.
+#
+# `domains`: a domain matches itself and every subdomain
+# ("microsoft.com" covers "schemas.microsoft.com"). URLs and emails are
+# allowlisted through their host / domain. IP addresses are never
+# allowlisted; their `scope` (private, loopback, ...) says what they are.
+#
+# Deliberately NOT listed: code and file hosting (github.com, pastebin.com,
+# discord.com, ...), which malware abuses for payloads and C2.
+
+schema_version = 1
+
+domains = [
+    # XML / document standards (manifests, Office, SOAP)
+    "w3.org",
+    "xmlsoap.org",
+    "openxmlformats.org",
+    "purl.org",
+    # Windows platform (manifests, schemas, update)
+    "microsoft.com",
+    "windows.com",
+    "windowsupdate.com",
+    # Certificate authorities: CRL / OCSP / CPS URLs in Authenticode chains
+    "digicert.com",
+    "verisign.com",
+    "symcb.com",
+    "symcd.com",
+    "thawte.com",
+    "globalsign.com",
+    "globalsign.net",
+    "sectigo.com",
+    "usertrust.com",
+    "comodoca.com",
+    "entrust.net",
+    "identrust.com",
+    "letsencrypt.org",
+    # Toolchains and runtimes (copyright notices, Go module paths)
+    "gnu.org",
+    "openssl.org",
+    "python.org",
+    "rust-lang.org",
+    "llvm.org",
+    "sourceware.org",
+    "golang.org",
+    "go.dev",
+    "gopkg.in",
+]

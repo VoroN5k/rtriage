@@ -27,6 +27,34 @@ expression: "serde_json::to_string_pretty(&v).unwrap()"
           "whole_file": 7.997997363186905,
           "window": 4096
         },
+        "iocs": {
+          "allowlisted": 0,
+          "items": [
+            {
+              "allowlisted": false,
+              "count": 1,
+              "kind": "url",
+              "offsets": [
+                16
+              ],
+              "scope": null,
+              "value": "http://c2.example.ru/gate.php",
+              "value_defanged": "hxxp://c2[.]example[.]ru/gate.php"
+            },
+            {
+              "allowlisted": false,
+              "count": 1,
+              "kind": "domain",
+              "offsets": [
+                16
+              ],
+              "scope": null,
+              "value": "c2.example.ru",
+              "value_defanged": "c2[.]example[.]ru"
+            }
+          ],
+          "limit_reached": false
+        },
         "pe": null,
         "runtime": null,
         "strings": {

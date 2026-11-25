@@ -39,6 +39,11 @@ pub struct Cli {
     #[arg(long)]
     pub explain: bool,
 
+    /// Defang URLs, domains, IPs and emails in text output (hxxp://, 1[.]2[.]3[.]4).
+    /// JSON always has both the raw value and `value_defanged`.
+    #[arg(long)]
+    pub defang: bool,
+
     /// Only show findings at or above this severity (the score always uses all).
     #[arg(long, value_enum, value_name = "LEVEL", default_value_t = MinSeverity::Info)]
     pub min_severity: MinSeverity,

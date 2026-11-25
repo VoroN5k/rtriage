@@ -35,6 +35,8 @@ pub struct Limits {
     pub max_certificates: usize,
     /// Max ELF `PT_DYNAMIC` entries read. Default: 4096.
     pub max_dynamic_entries: usize,
+    /// Max distinct IOCs kept. Default: 10 000.
+    pub max_iocs: usize,
     /// Max ELF notes read across all `PT_NOTE` segments. Default: 256.
     pub max_notes: usize,
     /// Max ELF symbols read per symbol table. Default: 200 000.
@@ -85,6 +87,7 @@ impl Default for Limits {
             max_dynamic_entries: 4096,
             max_symbols: 200_000,
             max_notes: 256,
+            max_iocs: 10_000,
             max_exports: 65_536,
             max_strings: 200_000,
             max_string_len: 4096,
