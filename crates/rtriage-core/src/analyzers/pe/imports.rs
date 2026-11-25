@@ -706,6 +706,33 @@ mod tests {
 
     // ---- imphash
 
+    /// Reference values computed with pefile (`get_imphash`, pefile master,
+    /// `__version__` 2024.8.26) on the exact bytes of
+    /// `rtriage_fixtures::pe::imphash_vectors::cases()`. Never edit these to
+    /// make a test pass: a mismatch means we diverged from pefile.
+    const PEFILE_IMPHASHES: &[(&str, &str)] = &[
+        ("dotnet_like_x86", "f34d5f2d4577ed6d9ceec516c1f5a744"),
+        ("go_like_x64", "b95ba81129d82cd0aace2e160cf72dbf"),
+        ("mixed_case_x64", "4ebb17a047d9ea45040de2128d1b095e"),
+        ("named_x86", "c9fe4607c427c0eeb6be6fe167a77737"),
+        ("ordinals_x64", "86408859f2b6b60a5f7ddf5d07738502"),
+    ];
+
+    #[test]
+    fn imphash_matches_pefile_reference_values() {
+        let cases = imphash_vectors::cases();
+        assert_eq!(cases.len(), PEFILE_IMPHASHES.len());
+        for (name, builder) in cases {
+            let expected = PEFILE_IMPHASHES
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, h)| *h)
+                .unwrap_or_else(|| panic!("no pefile reference for {name}"));
+            let r = analyze(builder.build().bytes);
+            assert_eq!(imports(&r).imphash.as_deref(), Some(expected), "{name}");
+        }
+    }
+
     #[test]
     fn imphash_follows_pefile_rules() {
         let r = analyze(
