@@ -21,6 +21,7 @@ use crate::deadline::Deadline;
 use crate::error::AnalysisError;
 use crate::input::Input;
 use crate::report::{Format, Report, ReportBuilder, Risk, StringsFacts};
+use crate::rules::PackerRuleSet;
 
 /// Data shared by all analyzers for one file. Derived data is computed on
 /// first use and cached, so it is independent of analyzer order.
@@ -197,8 +198,31 @@ impl Registry {
                 out.push_error(analyzer.name(), err);
             }
         }
-        // Scoring lands in M2; until then every report is clean-looking.
-        out.finish(Risk::default())
+        let mut report = out.finish(Risk::default());
+        let rules = match &config.packer_rules {
+            Some(custom) => Some(custom.as_ref()),
+            None => PackerRuleSet::bundled().ok(),
+        };
+        match rules {
+            Some(rules) => crate::scoring::score(&mut report, rules),
+            None => {
+                // Bundled rules broken (a bug, prevented by tests): score
+                // without explanations rather than not at all.
+                report.errors.push(crate::report::AnalyzerFailure {
+                    analyzer: "scoring",
+                    error: AnalysisError::Internal {
+                        reason: "bundled packer rules are invalid".into(),
+                    },
+                });
+                crate::scoring::score(
+                    &mut report,
+                    &PackerRuleSet {
+                        packers: Vec::new(),
+                    },
+                );
+            }
+        }
+        report
     }
 }
 

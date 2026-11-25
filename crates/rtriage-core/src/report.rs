@@ -73,8 +73,18 @@ pub struct PeFacts {
     pub tls: Option<PeTlsFacts>,
     /// CodeView debug information; `None` if the file has none.
     pub debug: Option<PeDebugFacts>,
-    /// Names of known packers/protectors detected (empty if none).
-    pub packers: Option<Vec<&'static str>>,
+    /// Known packers/protectors detected (empty if none).
+    pub packers: Option<Vec<PePackerFacts>>,
+}
+
+/// A detected packer and which independent indicators were seen.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PePackerFacts {
+    /// Packer name, e.g. `UPX`.
+    pub name: &'static str,
+    /// Indicators found, in fixed order: `section_names`,
+    /// `header_signature`, `stub_structure`.
+    pub indicators: Vec<&'static str>,
 }
 
 /// Data after the end of the image (and after the certificate table, which
@@ -514,6 +524,20 @@ pub struct Finding {
     pub evidence: Vec<Evidence>,
     /// MITRE ATT&CK technique IDs, e.g. `"T1055"`.
     pub attack: Vec<&'static str>,
+    /// Set when the finding is explained by a confirmed packer: it stays in
+    /// the report for the analyst but contributes no points and consumes no
+    /// category cap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suppressed: Option<Suppression>,
+}
+
+/// Why a finding does not count towards the score.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Suppression {
+    /// ID of the finding that explains this one (e.g. `PE-PACKER-KNOWN`).
+    pub by: &'static str,
+    /// Packer whose confirmed presence explains it (e.g. `UPX`).
+    pub packer: &'static str,
 }
 
 impl Finding {
@@ -533,6 +557,7 @@ impl Finding {
             detail: String::new(),
             evidence: Vec::new(),
             attack: Vec::new(),
+            suppressed: None,
         }
     }
 
@@ -580,13 +605,68 @@ pub enum RiskLevel {
     High,
 }
 
-/// Aggregate risk: a numeric score for sorting plus its level.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+/// Aggregate risk: a numeric score for sorting, its level, and exactly how it
+/// was computed (see `docs/heuristics.md`, "Scoring v1").
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Risk {
     /// Score used to sort files in batch mode.
     pub score: u32,
     /// Level derived from the score.
     pub level: RiskLevel,
+    /// One entry per finding, in scoring order.
+    pub breakdown: Vec<ScoreEntry>,
+}
+
+/// How one finding contributed to the score.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ScoreEntry {
+    /// Finding ID.
+    pub id: &'static str,
+    /// Finding category (the cap it counts against).
+    pub category: Category,
+    /// Points from the severity × confidence table.
+    pub table_points: u32,
+    /// Points actually added to the score.
+    pub points: u32,
+    /// Why `points` is lower than `table_points`, if it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reduced_by: Option<Reduction>,
+}
+
+/// Reason a finding contributed fewer points than its table value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Reduction {
+    /// Explained by a confirmed packer (see [`Finding::suppressed`]).
+    Suppressed {
+        /// Explaining finding ID.
+        by: &'static str,
+        /// Packer name.
+        packer: &'static str,
+    },
+    /// Another finding with the same ID already counted.
+    Duplicate,
+    /// The category cap was (partly) used up.
+    CategoryCap {
+        /// The cap.
+        cap: u32,
+    },
+    /// The global cap on low-severity points was (partly) used up.
+    LowSeverityCap {
+        /// The cap.
+        cap: u32,
+    },
+}
+
+/// Why static analysis of this file is less complete than usual.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AnalysisLimit {
+    /// Code is packed or protected: imports, strings and code-based findings
+    /// describe the unpacking stub, not the real program.
+    Packed,
 }
 
 /// An analyzer that failed, and why.
@@ -609,6 +689,8 @@ pub struct Report {
     pub findings: Vec<Finding>,
     /// Aggregate risk.
     pub risk: Risk,
+    /// Reasons the analysis is limited (empty when it is not).
+    pub analysis_limited: Vec<AnalysisLimit>,
     /// Analyzers that failed partially or completely.
     pub errors: Vec<AnalyzerFailure>,
 }
@@ -671,6 +753,7 @@ impl ReportBuilder {
             facts: self.facts,
             findings: self.findings,
             risk,
+            analysis_limited: Vec::new(),
             errors: self.errors,
         }
     }

@@ -53,7 +53,7 @@ mod tests {
         data.extend(b"\x00just some text\x00");
         let input = Input::from_bytes("sample.bin", data);
         let mut report = Registry::default().analyze(&input, &Config::default());
-        prepare(&mut report, all_strings);
+        prepare(&mut report, all_strings, rtriage_core::Severity::Info);
         Run {
             reports: vec![report],
             failures: vec![Failure {

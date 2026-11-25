@@ -33,8 +33,10 @@ Current version: **1**.
 | `file` | [FileInfo](#fileinfo) | Identity of the file. |
 | `facts` | [Facts](#facts) | Neutral extracted data. |
 | `findings` | array of [Finding](#finding) | Judgments, sorted by severity desc, confidence desc, id. |
-| `risk.score` | integer | Aggregate score for sorting (always `0` until scoring lands in M2). |
+| `risk.score` | integer | Aggregate score for sorting (see `heuristics.md`, "Scoring v1"). |
 | `risk.level` | enum | `clean_looking` \| `low` \| `medium` \| `high`. |
+| `risk.breakdown` | array | One entry per finding in scoring order: `{ id, category, table_points, points, reduced_by? }`. `reduced_by` is `{ kind: "suppressed", by, packer }`, `{ kind: "duplicate" }`, `{ kind: "category_cap", cap }` or `{ kind: "low_severity_cap", cap }`. Not affected by `--min-severity`. |
+| `analysis_limited` | array of enum | Why static analysis is less complete: `packed`. Empty normally. |
 | `errors` | array of [AnalyzerFailure](#analyzerfailure) | Analyzers that failed; the rest of the report is still valid. |
 
 ### FileInfo
@@ -123,7 +125,9 @@ limit_reached }`; `section` is `{ index, name }` or `null`.
 pdb_guid, pdb_age }`; `codeview` is `RSDS` or `NB10`; `pdb_guid` is
 `XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX` (`RSDS` only) or `null`.
 
-`pe.packers`: array of detected packer names (empty if none), e.g. `["UPX"]`.
+`pe.packers`: array of detected packers (empty if none):
+`{ name, indicators }`, e.g.
+`{ "name": "UPX", "indicators": ["section_names", "header_signature", "stub_structure"] }`.
 
 A PE that fails to parse produces one `errors` entry from analyzer
 `pe-parse`; the other PE analyzers then leave their facts `null`.
@@ -147,6 +151,10 @@ before displaying**), `truncated` (bool), `kinds` (array, omitted when empty).
 | `detail` | string | Explanation. |
 | `evidence` | array | Tagged by `type`: `range {offset,len}`, `section {index,name}`, `import {library,symbol}`, `string {offset,encoding,value}`, `metric {name,value}`, `field {name,value}`. |
 | `attack` | array of string | MITRE ATT&CK technique IDs. |
+| `suppressed` | object (optional) | Present when a confirmed packer explains the finding: `{ by, packer }`, e.g. `{ "by": "PE-PACKER-KNOWN", "packer": "UPX" }`. Such findings score 0. |
+
+`--min-severity` removes findings below the level from `findings` only;
+`risk` always reflects all findings.
 
 ### AnalyzerFailure
 

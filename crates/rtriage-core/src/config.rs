@@ -9,7 +9,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use crate::limits::Limits;
-use crate::rules::ApiRuleSet;
+use crate::rules::{ApiRuleSet, PackerRuleSet};
 
 /// Everything an analysis run can be tuned with.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -23,6 +23,9 @@ pub struct Config {
     /// API behavior rules; `None` = the bundled `rules/api_groups.toml`.
     #[serde(skip)]
     pub api_rules: Option<Arc<ApiRuleSet>>,
+    /// Packer explanations; `None` = the bundled `rules/packers.toml`.
+    #[serde(skip)]
+    pub packer_rules: Option<Arc<PackerRuleSet>>,
 }
 
 impl Config {
@@ -40,6 +43,7 @@ impl Default for Config {
             thresholds: Thresholds::default(),
             strings_min_len: Self::DEFAULT_STRINGS_MIN_LEN,
             api_rules: None,
+            packer_rules: None,
         }
     }
 }

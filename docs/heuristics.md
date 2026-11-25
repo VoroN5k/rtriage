@@ -3,8 +3,9 @@
 Every finding ID, its rationale, thresholds and known false positives are
 documented here. IDs are stable: renaming one requires a changelog note.
 
-> Status: the scoring rules below are agreed and fixed; they are implemented
-> in M2 step 7. Findings are added to the catalogue as their analyzers land.
+> Status: scoring v1 is implemented in `crates/rtriage-core/src/scoring.rs`,
+> a direct transcription of this section. `--explain` prints the breakdown;
+> JSON always carries it in `risk.breakdown`.
 
 ## Scoring v1
 
@@ -42,6 +43,9 @@ Global: the sum contributed by all `low`-severity findings is at most **15**.
 
 ### Algorithm and order
 
+0. **Explained-by** (see below): findings explained by a confirmed packer are
+   marked `suppressed`. They are listed with 0 points and take part in
+   nothing else below: no deduplication, no caps.
 1. **Points.** Each finding gets its points from the table.
 2. **Deduplicate by ID.** If several findings share an ID, only the one with
    the most points counts; ties keep the first in report order (step 3).
@@ -72,6 +76,45 @@ Because the highest-severity, highest-confidence findings are taken first,
 caps cut the weakest contributions. `--explain` prints every finding with its
 table points, its contribution, and which cap (if any) reduced it.
 
+### Explained-by: packer symptoms
+
+A packer makes a file *look* anomalous in predictable ways (RWX sections,
+virtual-only sections, high-entropy code, a stub entry point, a tiny import
+table). Counting all of those separately would push any legitimately packed
+tool to `high`. So once a packer is **confirmed**, the findings it
+necessarily causes are explained by it.
+
+- **Data.** [`rules/packers.toml`](../rules/packers.toml) lists per packer
+  the indicators required to confirm it (`confirm_with`) and the finding IDs
+  it explains (`explains`). Only UPX is listed for now.
+- **Confirmation needs independent indicators, all of them.** For UPX:
+  - `section_names`: `UPX0`/`UPX1`/... present;
+  - `header_signature`: `UPX!` in the first 4 KiB of the headers;
+  - `stub_structure`: an executable section with no raw data and >= 1 page
+    of virtual size, immediately followed by an executable section with raw
+    data, starting at or after the first one's end, containing the entry
+    point. This check ignores section names.
+
+  Spoofed names alone, or names + signature without the stub layout, confirm
+  nothing; `PE-PACKER-KNOWN` still fires, but nothing is suppressed. The rule
+  loader rejects `confirm_with` with fewer than two different indicators and
+  indicators rtriage cannot check for that packer.
+- **What can be explained.** Only structural PE findings:
+  `PE-SECTION-RWX`, `PE-SECTION-VIRTUAL-ONLY`, `PE-SECTION-HIGH-ENTROPY`,
+  `PE-SECTION-NAME-UNUSUAL`, `PE-ENTRYPOINT-UNUSUAL`,
+  `PE-IMPORTS-DYNAMIC-RESOLUTION`, `PE-IMPORTS-FEW`, `PE-PACKED-LIKELY`.
+  **API behavior groups (`PE-API-*`) are never suppressed**: the loader
+  rejects them, and the scorer skips them even if a rule slipped through.
+- **Effect.** A suppressed finding stays in `findings` with
+  `suppressed: { by: "PE-PACKER-KNOWN", packer: "UPX" }`, scores 0, and
+  consumes no category or low-severity cap. `--explain` shows each one.
+- **Analysis limited.** Whenever `PE-PACKER-KNOWN` or `PE-PACKED-LIKELY` is
+  present (confirmed or not), the report carries
+  `analysis_limited: ["packed"]` and the text output shows
+  `[PACKED: analysis limited]`: imports, strings and code findings describe
+  the unpacking stub, not the real program, so a low score is *not* evidence
+  of a benign file.
+
 ### Calibration checks
 
 | Scenario | Points | Level |
@@ -81,6 +124,12 @@ table points, its contribution, and which cap (if any) reduced it.
 | Injection + known packer (15) + RWX section (11) | 66 | high |
 | Packing signals alone, any number | ≤ 30 | at most medium |
 | TLS callbacks (Low/Medium) + anti-debug (Low/Medium) | 4 + 4 = 8 | clean_looking |
+| Confirmed UPX, nothing else (all symptoms explained) | 15 | low, `packed` |
+| Confirmed UPX + TLS callbacks | 15 + 4 = 19 | low, `packed` |
+| Confirmed UPX + injection chain | 15 + 40 = 55 | medium, `packed` |
+| Spoofed UPX names on an RWX + dynamic-resolution file | nothing suppressed | full score |
+
+These scenarios are end-to-end tests in `scoring.rs` (`end_to_end`).
 
 **Packing cap = 30.** Packing on its own can reach the bottom of `medium`
 but never `high`: packers are common in legitimate software (installers,

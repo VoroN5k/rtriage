@@ -11,6 +11,7 @@ expression: "serde_json::to_string_pretty(&v).unwrap()"
   ],
   "reports": [
     {
+      "analysis_limited": [],
       "errors": [],
       "facts": {
         "entropy": {
@@ -58,6 +59,7 @@ expression: "serde_json::to_string_pretty(&v).unwrap()"
       },
       "findings": [],
       "risk": {
+        "breakdown": [],
         "level": "clean_looking",
         "score": 0
       }

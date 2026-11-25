@@ -1,42 +1,48 @@
 ---
 source: crates/rtriage-cli/src/output/text.rs
-expression: "render_string(&Run { reports: vec![report], failures: vec![], }, PLAIN)"
+expression: "render_string(&Run { reports: vec![report], failures: vec![], }, TextOptions\n{ explain: true, ..PLAIN })"
 ---
 packed.exe
   Type     PE                         Size  10 261 bytes (10.0 KiB)
   MD5      1438eed256f6aa213b86a7371fcd9f87
   SHA-1    bd5c9fee4d6136a95893f0d4a333a745aeb0dbe6
   SHA-256  14608ff304fd5d4e70ee8fc5d25c875371c0f45efc9efc6c3e67df5ce79d7d8c
-  Risk     [CLEAN-LOOKING] score 0
+  Risk     [LOW] score 19  [PACKED: analysis limited]
 
 Findings
   [MEDIUM] PE-PACKER-KNOWN  Packed with UPX  (confidence: high, packing)
       Section names or signatures written by UPX. The code on disk is compressed or protected; static analysis of the original program needs unpacking first. Packers are also used by legitimate software.
       - packer = UPX
+      - indicators = section_names, header_signature, stub_structure
       - section #0 "UPX0"
       - section #1 "UPX1"
       - range 0x0000021d (+4 bytes)
       - signature = UPX!
+      - stub structure = #0 virtual-only target, entry point in #1 directly after it
   [MEDIUM] PE-IMPORTS-DYNAMIC-RESOLUTION  APIs resolved at run time  (confidence: medium, obfuscation)
       The import table is tiny (6 functions) but includes a library loader and GetProcAddress: the real API set is resolved at run time and hidden from static import analysis. Typical of packers and shellcode-style loaders.
       - import KERNEL32.DLL!LoadLibraryA
       - import KERNEL32.DLL!GetProcAddress
       - imported functions = 6
       ATT&CK: T1027.007
+      (explained by UPX via PE-PACKER-KNOWN: not scored)
   [MEDIUM] PE-SECTION-HIGH-ENTROPY  Executable section looks compressed or encrypted  (confidence: medium, packing)
       Section data has entropy >= 7.20 bits/byte. In code this means packed or encrypted instructions; in data sections it is often just compressed resources (images, archives), hence lower severity there.
       - section #1 "UPX1"
       - entropy = 8.000
+      (explained by UPX via PE-PACKER-KNOWN: not scored)
   [MEDIUM] PE-SECTION-RWX  Writable and executable section  (confidence: medium, anomaly)
       A section that is both writable and executable lets code modify itself in place, typical of packers, self-decrypting loaders and shellcode stubs. Normal compilers keep code read-only.
       - section #0 "UPX0"
       - Characteristics = 0xe0000020 (rwx)
       - section #1 "UPX1"
       - Characteristics = 0xe0000020 (rwx)
+      (explained by UPX via PE-PACKER-KNOWN: not scored)
   [MEDIUM] PE-SECTION-VIRTUAL-ONLY  Executable section with no data on disk  (confidence: medium, packing)
       An executable section occupies memory but has no bytes in the file: it is filled at run time, the classic layout of packers (e.g. UPX0) that decompress code into it. Uninitialized-data sections (.bss) are not executable and are not reported.
       - section #0 "UPX0"
       - VirtualSize = 0x20000 (SizeOfRawData 0)
+      (explained by UPX via PE-PACKER-KNOWN: not scored)
   [LOW] PE-TLS-CALLBACKS  TLS callbacks run before the entry point  (confidence: medium, anti_analysis)
       1 TLS callback(s) execute before the entry point, so a debugger breaking at the entry point misses them; used for anti-debugging and early unpacking. Rust and MinGW runtimes also register TLS callbacks.
       - callback = 0x401000 in #0 UPX0
@@ -45,6 +51,7 @@ Findings
       - AddressOfEntryPoint = 0x00021100
       - section #1 "UPX1"
       - first executable section = #0 UPX0
+      (explained by UPX via PE-PACKER-KNOWN: not scored)
   [INFO] PE-OVERLAY  Data appended after the image  (confidence: high, anomaly)
       Bytes after the last section are not loaded by Windows. Installers and self-extracting archives keep their payload there; so do droppers.
       - range 0x00002800 (+21 bytes)
@@ -57,6 +64,20 @@ Findings
       Section names not produced by common toolchains (MSVC, Clang, GCC/MinGW, Delphi, Go, drivers). Often set by packers and protectors; also by custom linkers.
       - section #0 "UPX0"
       - section #1 "UPX1"
+      (explained by UPX via PE-PACKER-KNOWN: not scored)
+
+Score breakdown  score 19 = sum of points below; level low
+  points  finding                          category           note
+     +15  PE-PACKER-KNOWN                  packing            
+      +0  PE-IMPORTS-DYNAMIC-RESOLUTION    obfuscation        explained by UPX (PE-PACKER-KNOWN), not scored
+      +0  PE-SECTION-HIGH-ENTROPY          packing            explained by UPX (PE-PACKER-KNOWN), not scored
+      +0  PE-SECTION-RWX                   anomaly            explained by UPX (PE-PACKER-KNOWN), not scored
+      +0  PE-SECTION-VIRTUAL-ONLY          packing            explained by UPX (PE-PACKER-KNOWN), not scored
+      +4  PE-TLS-CALLBACKS                 anti_analysis      
+      +0  PE-ENTRYPOINT-UNUSUAL            anomaly            explained by UPX (PE-PACKER-KNOWN), not scored
+      +0  PE-OVERLAY                       anomaly            informational
+      +0  PE-PDB-PATH                      metadata           informational
+      +0  PE-SECTION-NAME-UNUSUAL          anomaly            informational
 
 PE
   Machine      i386 (32-bit), exe, windows_cui
@@ -65,7 +86,7 @@ PE
   Timestamp    0x5f5e1000 (2020-09-13T12:26:40Z)
   Checksum     0x00000000 (not set; computed 0x00006dde)
   DLL flags    dynamic_base, nx_compat, terminal_server_aware
-  Packer       UPX
+  Packer       UPX (section_names, header_signature, stub_structure)
   Overlay      0x2800, 21 B, zip
   TLS          1 callback(s): 0x401000
   PDB          C:\Users\dev\proj\Release\tool.pdb

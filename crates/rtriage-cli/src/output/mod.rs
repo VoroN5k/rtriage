@@ -3,7 +3,7 @@
 pub mod json;
 pub mod text;
 
-use rtriage_core::Report;
+use rtriage_core::{Report, Severity};
 use serde::Serialize;
 
 /// A file that could not be analyzed at all.
@@ -24,11 +24,14 @@ pub struct Run {
     pub failures: Vec<Failure>,
 }
 
-/// Applies output-level filtering to a report (currently: string selection).
-pub fn prepare(report: &mut Report, all_strings: bool) {
+/// Output-level filtering, applied after scoring: string selection and the
+/// `--min-severity` finding filter. `risk` (score and breakdown) is left
+/// untouched, so it always reflects every finding.
+pub fn prepare(report: &mut Report, all_strings: bool, min_severity: Severity) {
     if !all_strings {
         if let Some(strings) = report.facts.strings.as_mut() {
             strings.retain_classified();
         }
     }
+    report.findings.retain(|f| f.severity >= min_severity);
 }

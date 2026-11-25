@@ -7,7 +7,7 @@ sample.exe
   MD5      5d10477857bf03e7375c9ee4aff7867d
   SHA-1    698868c50720fd5e6daed3ab85597d4918e270d4
   SHA-256  c87a96434e0f232b4a7658ba78c43928683b05aee07ca560e367d30bbe7eaca0
-  Risk     [CLEAN-LOOKING] score 0
+  Risk     [LOW] score 11
 
 Findings
   [MEDIUM] PE-IMPORTS-DYNAMIC-RESOLUTION  APIs resolved at run time  (confidence: medium, obfuscation)

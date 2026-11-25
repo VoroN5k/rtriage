@@ -8,12 +8,13 @@ use std::collections::BTreeMap;
 use std::io::{self, Write};
 
 use anstyle::{AnsiColor, Style};
+use rtriage_core::report::{AnalysisLimit, Reduction};
 use rtriage_core::report::{
     EntropyFacts, ExtractedString, PeImportsFacts, PeSectionFacts, StringEncoding, StringKind,
     StringsFacts,
 };
 use rtriage_core::{
-    Evidence, Finding, Format, PeFacts, PeHeaderFacts, Report, RiskLevel, Severity,
+    Evidence, Finding, Format, PeFacts, PeHeaderFacts, Report, Risk, RiskLevel, Severity,
 };
 use serde::Serialize;
 
@@ -33,6 +34,8 @@ pub struct TextOptions {
     pub color: bool,
     /// List every string instead of capping classified ones per kind.
     pub all_strings: bool,
+    /// Print the score breakdown.
+    pub explain: bool,
 }
 
 /// Writes `run` as text.
@@ -55,6 +58,9 @@ fn render_report(
 ) -> io::Result<()> {
     render_header(r, out, p)?;
     render_findings(&r.findings, out, p)?;
+    if opts.explain {
+        render_explain(&r.risk, out, p)?;
+    }
     if let Some(h) = r.facts.pe.as_ref().and_then(|pe| pe.headers.as_ref()) {
         render_pe_headers(h, out, p)?;
     }
@@ -99,9 +105,22 @@ fn render_header(r: &Report, out: &mut dyn Write, p: &Painter) -> io::Result<()>
         writeln!(out, "  {}  {}", p.label("SHA-256"), h.sha256)?;
     }
     let (text, color) = risk_badge(r.risk.level);
+    let limited = if r.analysis_limited.contains(&AnalysisLimit::Packed) {
+        format!(
+            "  {}",
+            p.paint(
+                Style::new()
+                    .bold()
+                    .fg_color(Some(AnsiColor::Magenta.into())),
+                "[PACKED: analysis limited]"
+            )
+        )
+    } else {
+        String::new()
+    };
     writeln!(
         out,
-        "  {}  {} score {}",
+        "  {}  {} score {}{limited}",
         p.label("Risk   "),
         p.paint(
             Style::new().bold().fg_color(Some(color.into())),
@@ -109,6 +128,53 @@ fn render_header(r: &Report, out: &mut dyn Write, p: &Painter) -> io::Result<()>
         ),
         r.risk.score
     )
+}
+
+fn render_explain(risk: &Risk, out: &mut dyn Write, p: &Painter) -> io::Result<()> {
+    writeln!(
+        out,
+        "\n{}  score {} = sum of points below; level {}",
+        p.heading("Score breakdown"),
+        risk.score,
+        enum_name(&risk.level)
+    )?;
+    if risk.breakdown.is_empty() {
+        return writeln!(out, "  (no findings)");
+    }
+    writeln!(
+        out,
+        "  {:>6}  {:<32} {:<18} note",
+        "points", "finding", "category"
+    )?;
+    for e in &risk.breakdown {
+        let note = match &e.reduced_by {
+            None if e.table_points == 0 => "informational".to_owned(),
+            None => String::new(),
+            Some(Reduction::Suppressed { by, packer }) => {
+                format!("explained by {packer} ({by}), not scored")
+            }
+            Some(Reduction::Duplicate) => "duplicate ID, counted once".to_owned(),
+            Some(Reduction::CategoryCap { cap }) => {
+                format!(
+                    "of {}; {} cap {cap} reached",
+                    e.table_points,
+                    enum_name(&e.category)
+                )
+            }
+            Some(Reduction::LowSeverityCap { cap }) => {
+                format!("of {}; low-severity cap {cap} reached", e.table_points)
+            }
+            Some(_) => "reduced".to_owned(),
+        };
+        writeln!(
+            out,
+            "  {:>6}  {:<32} {:<18} {note}",
+            format!("+{}", e.points),
+            e.id,
+            enum_name(&e.category)
+        )?;
+    }
+    Ok(())
 }
 
 fn render_findings(findings: &[Finding], out: &mut dyn Write, p: &Painter) -> io::Result<()> {
@@ -138,6 +204,16 @@ fn render_findings(findings: &[Finding], out: &mut dyn Write, p: &Painter) -> io
         }
         if !f.attack.is_empty() {
             writeln!(out, "      ATT&CK: {}", f.attack.join(", "))?;
+        }
+        if let Some(s) = &f.suppressed {
+            writeln!(
+                out,
+                "      {}",
+                p.label(&format!(
+                    "(explained by {} via {}: not scored)",
+                    s.packer, s.by
+                ))
+            )?;
         }
     }
     Ok(())
@@ -404,8 +480,13 @@ fn render_pe_sections(
 
 /// Packer, overlay, TLS and PDB lines, appended to the PE block.
 fn render_pe_extras(pe: &PeFacts, out: &mut dyn Write) -> io::Result<()> {
-    if let Some(packers) = pe.packers.as_ref().filter(|p| !p.is_empty()) {
-        writeln!(out, "  Packer       {}", packers.join(", "))?;
+    for packer in pe.packers.iter().flatten() {
+        writeln!(
+            out,
+            "  Packer       {} ({})",
+            packer.name,
+            packer.indicators.join(", ")
+        )?;
     }
     if let Some(o) = &pe.overlay {
         let entropy = o
@@ -612,7 +693,7 @@ mod tests {
             })
             .attack("T1055"),
         );
-        prepare(&mut report, all_strings);
+        prepare(&mut report, all_strings, rtriage_core::Severity::Info);
         Run {
             reports: vec![report],
             failures: vec![Failure {
@@ -631,6 +712,7 @@ mod tests {
     const PLAIN: TextOptions = TextOptions {
         color: false,
         all_strings: false,
+        explain: false,
     };
 
     #[test]
@@ -692,7 +774,7 @@ mod tests {
         }
         let input = Input::from_bytes("many.bin", data);
         let mut report = Registry::default().analyze(&input, &Config::default());
-        prepare(&mut report, false);
+        prepare(&mut report, false, rtriage_core::Severity::Info);
         let s = render_string(
             &Run {
                 reports: vec![report],
@@ -714,7 +796,7 @@ mod tests {
             .build();
         let input = Input::from_bytes("sample.exe", built.bytes);
         let mut report = Registry::default().analyze(&input, &Config::default());
-        prepare(&mut report, false);
+        prepare(&mut report, false, rtriage_core::Severity::Info);
         insta::assert_snapshot!(render_string(
             &Run {
                 reports: vec![report],
@@ -734,13 +816,16 @@ mod tests {
             .build();
         let input = Input::from_bytes("packed.exe", built.bytes);
         let mut report = Registry::default().analyze(&input, &Config::default());
-        prepare(&mut report, false);
+        prepare(&mut report, false, rtriage_core::Severity::Info);
         insta::assert_snapshot!(render_string(
             &Run {
                 reports: vec![report],
                 failures: vec![],
             },
-            PLAIN
+            TextOptions {
+                explain: true,
+                ..PLAIN
+            }
         ));
     }
 

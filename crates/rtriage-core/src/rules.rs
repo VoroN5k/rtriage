@@ -542,3 +542,227 @@ slots = [["Foo", "Bar*"]]
         }
     }
 }
+
+// ======================================================= packer explanations
+
+/// The packer explanations shipped with rtriage.
+pub const BUNDLED_PACKER_RULES: &str = include_str!("../../../rules/packers.toml");
+
+/// Finding IDs a packer may explain: structural PE findings only. API
+/// behavior groups (`PE-API-*`) are deliberately absent and can never be
+/// suppressed.
+pub const EXPLAINABLE_IDS: &[&str] = &[
+    "PE-SECTION-RWX",
+    "PE-SECTION-VIRTUAL-ONLY",
+    "PE-SECTION-HIGH-ENTROPY",
+    "PE-SECTION-NAME-UNUSUAL",
+    "PE-ENTRYPOINT-UNUSUAL",
+    "PE-IMPORTS-DYNAMIC-RESOLUTION",
+    "PE-IMPORTS-FEW",
+    "PE-PACKED-LIKELY",
+];
+
+/// Minimum independent indicators required to confirm a packer.
+pub const MIN_CONFIRM_INDICATORS: usize = 2;
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPackerFile {
+    schema_version: u32,
+    #[serde(default, rename = "packer")]
+    packers: Vec<RawPacker>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPacker {
+    name: String,
+    confirm_with: Vec<String>,
+    explains: Vec<String>,
+}
+
+/// Validated packer explanations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackerRuleSet {
+    /// One entry per packer.
+    pub packers: Vec<PackerRule>,
+}
+
+/// What a confirmed packer explains.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackerRule {
+    /// Packer name as detected by the `pe-packers` analyzer.
+    pub name: &'static str,
+    /// Indicators that must all be present.
+    pub confirm_with: Vec<&'static str>,
+    /// Finding IDs explained once confirmed (all from [`EXPLAINABLE_IDS`]).
+    pub explains: Vec<&'static str>,
+}
+
+impl PackerRule {
+    /// `true` if every required indicator is in `found`.
+    pub fn is_confirmed_by(&self, found: &[&str]) -> bool {
+        self.confirm_with.iter().all(|i| found.contains(i))
+    }
+}
+
+impl PackerRuleSet {
+    /// The bundled explanations (parsed once).
+    ///
+    /// # Errors
+    /// Only if the bundled file is broken, which the test suite prevents.
+    pub fn bundled() -> Result<&'static PackerRuleSet, &'static RulesError> {
+        static BUNDLED: LazyLock<Result<PackerRuleSet, RulesError>> =
+            LazyLock::new(|| PackerRuleSet::parse(BUNDLED_PACKER_RULES));
+        BUNDLED.as_ref()
+    }
+
+    /// Parses and validates a packer explanations file.
+    ///
+    /// # Errors
+    /// See [`RulesError`].
+    pub fn parse(text: &str) -> Result<Self, RulesError> {
+        if text.len() > MAX_RULES_FILE_SIZE {
+            return Err(RulesError::TooLarge {
+                size: text.len(),
+                limit: MAX_RULES_FILE_SIZE,
+            });
+        }
+        let raw: RawPackerFile = toml::from_str(text).map_err(|e| RulesError::Syntax {
+            reason: e.to_string(),
+        })?;
+        if raw.schema_version != SCHEMA_VERSION {
+            return Err(RulesError::Schema {
+                found: raw.schema_version,
+            });
+        }
+        if raw.packers.len() > MAX_GROUPS {
+            return Err(RulesError::TooManyGroups {
+                count: raw.packers.len(),
+            });
+        }
+        let known: Vec<(&'static str, Vec<&'static str>)> =
+            crate::analyzers::pe::packers::known_packers().collect();
+        let mut seen = BTreeSet::new();
+        let mut packers = Vec::with_capacity(raw.packers.len());
+        for p in raw.packers {
+            let Some((name, available)) = known.iter().find(|(n, _)| *n == p.name) else {
+                return Err(invalid(&p.name, "unknown packer name"));
+            };
+            if !seen.insert(*name) {
+                return Err(invalid(&p.name, "duplicate packer"));
+            }
+            let mut confirm_with = Vec::new();
+            for ind in &p.confirm_with {
+                let Some(i) = available.iter().find(|a| **a == ind.as_str()) else {
+                    return Err(invalid(
+                        &p.name,
+                        &format!("indicator {ind:?} is not available for this packer"),
+                    ));
+                };
+                if !confirm_with.contains(i) {
+                    confirm_with.push(*i);
+                }
+            }
+            if confirm_with.len() < MIN_CONFIRM_INDICATORS {
+                return Err(invalid(
+                    &p.name,
+                    "confirm_with needs at least two different indicators",
+                ));
+            }
+            let mut explains = Vec::new();
+            for id in &p.explains {
+                let Some(known_id) = EXPLAINABLE_IDS.iter().find(|k| **k == id.as_str()) else {
+                    return Err(invalid(
+                        &p.name,
+                        &format!("{id:?} cannot be explained by a packer (API groups never can)"),
+                    ));
+                };
+                if !explains.contains(known_id) {
+                    explains.push(*known_id);
+                }
+            }
+            packers.push(PackerRule {
+                name,
+                confirm_with,
+                explains,
+            });
+        }
+        Ok(Self { packers })
+    }
+}
+
+#[cfg(test)]
+mod packer_tests {
+    use super::*;
+
+    fn file(body: &str) -> String {
+        format!("schema_version = 1\n[[packer]]\n{body}\n")
+    }
+
+    #[test]
+    fn bundled_packer_rules_are_valid() {
+        let r = PackerRuleSet::bundled().unwrap();
+        assert_eq!(r.packers.len(), 1);
+        let upx = &r.packers[0];
+        assert_eq!(upx.name, "UPX");
+        assert_eq!(
+            upx.confirm_with,
+            ["section_names", "header_signature", "stub_structure"]
+        );
+        assert!(upx.explains.contains(&"PE-SECTION-RWX"));
+        assert!(upx.explains.iter().all(|id| !id.starts_with("PE-API-")));
+    }
+
+    #[test]
+    fn api_groups_can_never_be_explained() {
+        let f = file(
+            "name = \"UPX\"\nconfirm_with = [\"section_names\", \"header_signature\"]\n\
+             explains = [\"PE-API-INJECTION\"]",
+        );
+        assert!(matches!(
+            PackerRuleSet::parse(&f),
+            Err(RulesError::Invalid { .. })
+        ));
+    }
+
+    #[test]
+    fn single_indicator_is_rejected() {
+        let f = file(
+            "name = \"UPX\"\nconfirm_with = [\"section_names\", \"section_names\"]\nexplains = []",
+        );
+        assert!(matches!(
+            PackerRuleSet::parse(&f),
+            Err(RulesError::Invalid { .. })
+        ));
+    }
+
+    #[test]
+    fn unavailable_indicator_is_rejected() {
+        // ASPack has no header signature or stub check in rtriage.
+        let f = file("name = \"ASPack\"\nconfirm_with = [\"section_names\", \"header_signature\"]\nexplains = []");
+        assert!(matches!(
+            PackerRuleSet::parse(&f),
+            Err(RulesError::Invalid { .. })
+        ));
+    }
+
+    #[test]
+    fn unknown_packer_and_fields_are_rejected() {
+        let f = file("name = \"Nope\"\nconfirm_with = []\nexplains = []");
+        assert!(PackerRuleSet::parse(&f).is_err());
+        let f = file("name = \"UPX\"\nconfirm_with = []\nexplains = []\nextra = 1");
+        assert!(matches!(
+            PackerRuleSet::parse(&f),
+            Err(RulesError::Syntax { .. })
+        ));
+    }
+
+    #[test]
+    fn confirmation_needs_every_indicator() {
+        let upx = &PackerRuleSet::bundled().unwrap().packers[0];
+        assert!(upx.is_confirmed_by(&["section_names", "header_signature", "stub_structure"]));
+        assert!(!upx.is_confirmed_by(&["section_names", "header_signature"]));
+        assert!(!upx.is_confirmed_by(&["section_names"]));
+    }
+}

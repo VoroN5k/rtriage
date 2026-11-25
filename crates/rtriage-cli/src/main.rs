@@ -58,7 +58,7 @@ fn run(cli: &Cli, config: &Config) -> anyhow::Result<ExitCode> {
     for path in &cli.files {
         match triage(path, &registry, config) {
             Ok(mut report) => {
-                output::prepare(&mut report, cli.all_strings);
+                output::prepare(&mut report, cli.all_strings, cli.min_severity.into());
                 result.reports.push(report);
             }
             Err(failure) => {
@@ -166,6 +166,7 @@ fn render(cli: &Cli, run: &Run, out: &mut dyn Write, color: bool) -> io::Result<
             TextOptions {
                 color,
                 all_strings: cli.all_strings,
+                explain: cli.explain,
             },
         ),
         OutputFormat::Json => output::json::render(run, out),

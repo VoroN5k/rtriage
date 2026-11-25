@@ -188,3 +188,58 @@ fn missing_api_rules_file_is_a_usage_error() {
     let out = rtriage(&["--api-rules", "no-such-rules.toml", "x.bin"]);
     assert_eq!(out.status.code(), Some(2));
 }
+
+fn upx_pe(name: &str) -> PathBuf {
+    let bytes = rtriage_fixtures::pe::profiles::upx_like(rtriage_fixtures::pe::Arch::X86)
+        .build()
+        .bytes;
+    scratch(name, &bytes)
+}
+
+#[test]
+fn json_carries_breakdown_suppression_and_packed_flag() {
+    let out = rtriage(&[upx_pe("upx-json.exe").to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0));
+    let v = json(&out);
+    let r = &v["reports"][0];
+    assert_eq!(r["risk"]["score"], 15);
+    assert_eq!(r["risk"]["level"], "low");
+    assert_eq!(r["analysis_limited"][0], "packed");
+    let rwx = r["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["id"] == "PE-SECTION-RWX")
+        .unwrap();
+    assert_eq!(rwx["suppressed"]["packer"], "UPX");
+    assert!(r["risk"]["breakdown"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["id"] == "PE-SECTION-RWX" && e["reduced_by"]["kind"] == "suppressed"));
+}
+
+#[test]
+fn min_severity_filters_findings_but_not_the_score() {
+    let f = injection_pe("inject-minsev.exe");
+    let all = json(&rtriage(&[f.to_str().unwrap()]));
+    let high = json(&rtriage(&["--min-severity", "high", f.to_str().unwrap()]));
+    assert_eq!(all["reports"][0]["risk"], high["reports"][0]["risk"]);
+    let ids = finding_ids(&high);
+    assert_eq!(ids, ["PE-API-INJECTION"]);
+    assert!(finding_ids(&all).len() > ids.len());
+}
+
+#[test]
+fn explain_prints_breakdown_in_text() {
+    let out = Command::new(env!("CARGO_BIN_EXE_rtriage"))
+        .args(["--explain", upx_pe("upx-explain.exe").to_str().unwrap()])
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("Score breakdown"));
+    assert!(text.contains("explained by UPX"));
+    assert!(text.contains("[PACKED: analysis limited]"));
+}

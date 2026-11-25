@@ -35,6 +35,14 @@ pub struct Cli {
     #[arg(long, value_name = "BYTES")]
     pub max_size: Option<u64>,
 
+    /// Show how the risk score was computed (every finding, cap and suppression).
+    #[arg(long)]
+    pub explain: bool,
+
+    /// Only show findings at or above this severity (the score always uses all).
+    #[arg(long, value_enum, value_name = "LEVEL", default_value_t = MinSeverity::Info)]
+    pub min_severity: MinSeverity,
+
     /// Replace the bundled API behavior rules with this TOML file
     /// (same format as rules/api_groups.toml).
     #[arg(long, value_name = "FILE")]
@@ -67,6 +75,30 @@ pub enum OutputFormat {
     Json,
 }
 
+/// Severity filter for displayed findings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum MinSeverity {
+    /// Everything (default).
+    Info,
+    /// Low and above.
+    Low,
+    /// Medium and above.
+    Medium,
+    /// High only.
+    High,
+}
+
+impl From<MinSeverity> for rtriage_core::Severity {
+    fn from(m: MinSeverity) -> Self {
+        match m {
+            MinSeverity::Info => Self::Info,
+            MinSeverity::Low => Self::Low,
+            MinSeverity::Medium => Self::Medium,
+            MinSeverity::High => Self::High,
+        }
+    }
+}
+
 impl Cli {
     /// `true` unless `--no-color` or a non-empty `NO_COLOR` is set.
     pub fn color_allowed(&self) -> bool {
@@ -92,6 +124,15 @@ mod tests {
         assert!(!cli.all_strings);
         assert_eq!(cli.max_size, None);
         assert_eq!(cli.timeout.get(), 30);
+        assert!(!cli.explain);
+        assert_eq!(cli.min_severity, MinSeverity::Info);
+    }
+
+    #[test]
+    fn min_severity_values() {
+        let cli = Cli::try_parse_from(["rtriage", "--min-severity", "medium", "a"]).unwrap();
+        assert_eq!(cli.min_severity, MinSeverity::Medium);
+        assert!(Cli::try_parse_from(["rtriage", "--min-severity", "critical", "a"]).is_err());
     }
 
     #[test]

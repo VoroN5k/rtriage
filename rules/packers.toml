@@ -1,0 +1,32 @@
+# rtriage packer explanations ("explained-by").
+#
+# When a packer is CONFIRMED, the structural findings it necessarily causes
+# are marked as explained by it: they stay in the report, but contribute no
+# points and consume no category cap. `--explain` lists every suppression.
+#
+#   confirm_with  Indicators that must ALL be present (at least two, so a
+#                 single spoofed section name never suppresses anything):
+#                   section_names     the packer's default section names
+#                   header_signature  its signature in the PE headers
+#                   stub_structure    its name-independent section layout
+#                 Only indicators rtriage can check for that packer are allowed.
+#   explains      Finding IDs the packer explains. Only structural PE findings
+#                 are allowed; PE-API-* behavior groups are never suppressed.
+#
+# Detection itself (names, signatures) lives in the pe-packers analyzer; this
+# file only says what a confirmed packer explains. See docs/heuristics.md.
+
+schema_version = 1
+
+[[packer]]
+name = "UPX"
+confirm_with = ["section_names", "header_signature", "stub_structure"]
+explains = [
+    "PE-SECTION-RWX",            # UPX0/UPX1 are RWX by design
+    "PE-SECTION-VIRTUAL-ONLY",   # UPX0 is the decompression target
+    "PE-SECTION-HIGH-ENTROPY",   # UPX1 holds compressed code
+    "PE-SECTION-NAME-UNUSUAL",   # UPX0/UPX1
+    "PE-ENTRYPOINT-UNUSUAL",     # entry point is the decompressor stub in UPX1
+    "PE-IMPORTS-DYNAMIC-RESOLUTION", # stub rebuilds the import table itself
+    "PE-IMPORTS-FEW",            # minimal stub import set
+]
