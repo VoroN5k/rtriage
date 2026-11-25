@@ -7,12 +7,19 @@
 //! (e.g. forging the toolchain, as in the Olympic Destroyer false flag) breaks
 //! it unless the forger recomputes it.
 //!
-//! Facts only; findings are added once their IDs are agreed.
+//! Findings: `PE-RICH-CHECKSUM-MISMATCH`, `PE-RICH-ABSENT` (see `docs/heuristics.md`).
 
 use super::read_u32;
 use crate::analyzers::{AnalysisContext, Analyzer};
 use crate::error::AnalysisError;
-use crate::report::{Format, PeFacts, PeRichEntry, PeRichFacts, ReportBuilder};
+use crate::report::{
+    Category, Confidence, Evidence, Finding, Format, PeFacts, PeRichEntry, PeRichFacts,
+    ReportBuilder, Severity,
+};
+
+/// `MajorLinkerVersion` values written by the Microsoft linker (VC 6.0 to
+/// VS 2015+); all of them emit a Rich header.
+const MSVC_LINKER_VERSIONS: std::ops::RangeInclusive<u8> = 6..=14;
 
 /// `"DanS"` as a little-endian dword.
 const DANS: u32 = 0x536E_6144;
@@ -38,8 +45,56 @@ impl Analyzer for PeRichAnalyzer {
         let Some(pe) = super::pe_or_skip(ctx) else {
             return Ok(());
         };
-        if let Some(rich) = parse(&ctx.input.data, pe.pe_offset)? {
-            out.facts.pe.get_or_insert_with(PeFacts::default).rich = Some(rich);
+        match parse(&ctx.input.data, pe.pe_offset)? {
+            Some(rich) => {
+                if !rich.checksum_valid {
+                    out.push_finding(
+                        Finding::new(
+                            "PE-RICH-CHECKSUM-MISMATCH",
+                            Severity::Low,
+                            Category::Anomaly,
+                            "Rich header was edited",
+                        )
+                        .detail(
+                            "The Rich header's checksum does not match its build-tool \
+                             records: they were altered after linking. Used to forge a \
+                             toolchain fingerprint (false flags) or left by sloppy patching.",
+                        )
+                        .evidence(Evidence::Field {
+                            name: "stored key",
+                            value: format!("0x{:08x}", rich.key),
+                        })
+                        .evidence(Evidence::Field {
+                            name: "computed",
+                            value: format!("0x{:08x}", rich.computed_checksum),
+                        }),
+                    );
+                }
+                out.facts.pe.get_or_insert_with(PeFacts::default).rich = Some(rich);
+            }
+            None if MSVC_LINKER_VERSIONS.contains(&pe.major_linker_version)
+                && !pe.is_managed_dotnet() =>
+            {
+                out.push_finding(
+                    Finding::new(
+                        "PE-RICH-ABSENT",
+                        Severity::Info,
+                        Category::Metadata,
+                        "No Rich header despite an MSVC-style linker version",
+                    )
+                    .confidence(Confidence::Low)
+                    .detail(
+                        "Microsoft's linker writes a Rich header; this file claims an MSVC \
+                         linker version but has none, so it was stripped or built by another \
+                         linker (lld-link writes version 14 without one).",
+                    )
+                    .evidence(Evidence::Field {
+                        name: "MajorLinkerVersion",
+                        value: pe.major_linker_version.to_string(),
+                    }),
+                );
+            }
+            None => {}
         }
         Ok(())
     }
@@ -198,6 +253,76 @@ mod tests {
     fn no_rich_header() {
         let r = analyze(PeBuilder::minimal(Arch::X64).build().bytes);
         assert!(rich(&r).is_none());
+    }
+
+    fn ids(r: &Report) -> Vec<&'static str> {
+        r.findings
+            .iter()
+            .map(|f| f.id)
+            .filter(|id| id.starts_with("PE-RICH"))
+            .collect()
+    }
+
+    #[test]
+    fn valid_rich_has_no_finding() {
+        let r = analyze(
+            PeBuilder::minimal(Arch::X64)
+                .rich_header(&ENTRIES)
+                .build()
+                .bytes,
+        );
+        assert!(ids(&r).is_empty());
+    }
+
+    #[test]
+    fn edited_rich_is_flagged() {
+        let mut built = PeBuilder::minimal(Arch::X64).rich_header(&ENTRIES).build();
+        let key = u32::from_le_bytes(
+            built.bytes[RICH_OFFSET + 4..RICH_OFFSET + 8]
+                .try_into()
+                .unwrap(),
+        );
+        put_u32(&mut built.bytes, RICH_OFFSET + 16, 0x00FF_0001 ^ key);
+        let r = analyze(built.bytes);
+        assert_eq!(ids(&r), ["PE-RICH-CHECKSUM-MISMATCH"]);
+        let f = r
+            .findings
+            .iter()
+            .find(|f| f.id == "PE-RICH-CHECKSUM-MISMATCH")
+            .unwrap();
+        assert_eq!(
+            (f.severity, f.confidence),
+            (Severity::Low, Confidence::Medium)
+        );
+    }
+
+    #[test]
+    fn msvc_linker_without_rich_is_info() {
+        let r = analyze(PeBuilder::minimal(Arch::X64).build().bytes);
+        assert_eq!(ids(&r), ["PE-RICH-ABSENT"]);
+        assert_eq!(
+            r.findings
+                .iter()
+                .find(|f| f.id == "PE-RICH-ABSENT")
+                .unwrap()
+                .severity,
+            Severity::Info
+        );
+    }
+
+    #[test]
+    fn other_linkers_and_dotnet_without_rich_are_fine() {
+        use rtriage_fixtures::pe::profiles;
+        for bytes in [
+            profiles::go_like(Arch::X64).build().bytes, // linker 3
+            PeBuilder::minimal(Arch::X86)
+                .linker_version(2)
+                .build()
+                .bytes, // MinGW-style
+            profiles::dotnet_like(Arch::X86).build().bytes, // managed
+        ] {
+            assert!(ids(&analyze(bytes)).is_empty());
+        }
     }
 
     #[test]

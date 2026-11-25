@@ -560,6 +560,7 @@ pub const EXPLAINABLE_IDS: &[&str] = &[
     "PE-IMPORTS-DYNAMIC-RESOLUTION",
     "PE-IMPORTS-FEW",
     "PE-PACKED-LIKELY",
+    "PE-RESOURCE-HIGH-ENTROPY",
 ];
 
 /// Minimum independent indicators required to confirm a packer.

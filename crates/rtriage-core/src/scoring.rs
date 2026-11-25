@@ -451,6 +451,43 @@ mod tests {
         }
 
         #[test]
+        fn upx_explains_encrypted_resources() {
+            use rtriage_fixtures::pe::ResourceSpec;
+            let payload: Vec<u8> = (0..8192u32).map(|i| (i % 256) as u8).collect();
+            let r = analyze(
+                profiles::upx_like(Arch::X64)
+                    .resource(ResourceSpec::new(10, 1, payload))
+                    .build()
+                    .bytes,
+            );
+            assert!(suppressed(&r).contains(&"PE-RESOURCE-HIGH-ENTROPY"));
+            assert_eq!(r.risk.score, 15);
+        }
+
+        #[test]
+        fn reflective_dll_with_injection_chain_hits_injection_cap() {
+            use rtriage_fixtures::pe::ExportSpec;
+            let r = analyze(
+                PeBuilder::minimal(Arch::X64)
+                    .dll(true)
+                    .import("KERNEL32.dll", INJECTION)
+                    .exports("t.exe", vec![ExportSpec::named("ReflectiveLoader")])
+                    .build()
+                    .bytes,
+            );
+            let injection: u32 = r
+                .risk
+                .breakdown
+                .iter()
+                .filter(|e| e.category == Category::Injection)
+                .map(|e| e.points)
+                .sum();
+            // Two 40-point injection findings, one category cap of 40.
+            assert_eq!(injection, 40);
+            assert!(r.risk.level >= RiskLevel::Medium);
+        }
+
+        #[test]
         fn calibration_injection_alone_is_medium() {
             let r = analyze(
                 PeBuilder::minimal(Arch::X64)

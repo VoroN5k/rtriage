@@ -74,6 +74,9 @@ pub struct Thresholds {
     /// `PE-IMPORTS-DYNAMIC-RESOLUTION` requires the import table to be at most
     /// this many functions. Default: 20.
     pub dynamic_resolution_max_imports: u64,
+    /// Resources smaller than this are not judged by `PE-RESOURCE-HIGH-ENTROPY`.
+    /// Default: 4096.
+    pub resource_entropy_min_size: usize,
 }
 
 impl Thresholds {
@@ -95,6 +98,7 @@ impl Default for Thresholds {
             virtual_only_min_size: 0x1000,
             imports_few_max: 10,
             dynamic_resolution_max_imports: 20,
+            resource_entropy_min_size: 4096,
         }
     }
 }

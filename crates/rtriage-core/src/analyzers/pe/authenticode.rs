@@ -6,14 +6,15 @@
 //! blob looks like a DER PKCS#7 SignedData. The signature itself is **not**
 //! verified: status is at best "signed (unverified)".
 //!
-//! Facts only; findings are added once their IDs are agreed.
+//! Findings: `PE-SIGNED` (Info, never lowers the risk), `PE-SIGNATURE-MALFORMED`.
 
 use super::{read_u16, read_u32, PeImage};
 use crate::analyzers::{AnalysisContext, Analyzer};
 use crate::error::AnalysisError;
 use crate::limits::Limits;
 use crate::report::{
-    Format, PeCertificate, PeFacts, PeSignatureFacts, ReportBuilder, SignatureStatus,
+    Category, Confidence, Evidence, Finding, Format, PeCertificate, PeFacts, PeSignatureFacts,
+    ReportBuilder, Severity, SignatureStatus,
 };
 
 /// Data directory index of the certificate table.
@@ -43,6 +44,7 @@ impl Analyzer for PeSignatureAnalyzer {
             return Ok(());
         };
         if let Some(sig) = parse(pe, &ctx.input.data, &ctx.config.limits) {
+            out.push_finding(signature_finding(&sig));
             out.facts.pe.get_or_insert_with(PeFacts::default).signature = Some(sig);
         }
         Ok(())
@@ -150,6 +152,55 @@ pub fn parse(pe: &PeImage, data: &[u8], limits: &Limits) -> Option<PeSignatureFa
     Some(facts)
 }
 
+/// `PE-SIGNED` (context only: an unverified signature never lowers the risk)
+/// or `PE-SIGNATURE-MALFORMED`.
+fn signature_finding(sig: &PeSignatureFacts) -> Finding {
+    let location = Evidence::Range {
+        offset: sig.offset,
+        len: sig.size,
+    };
+    match sig.status {
+        SignatureStatus::SignedUnverified => Finding::new(
+            "PE-SIGNED",
+            Severity::Info,
+            Category::Metadata,
+            "Signed (signature not verified)",
+        )
+        .confidence(Confidence::High)
+        .detail(
+            "An Authenticode certificate table with a PKCS#7 SignedData blob is present. \
+             rtriage does not verify signatures: the file may be unsigned in practice, \
+             re-signed or signed with a stolen certificate. This does not lower the risk.",
+        )
+        .evidence(location)
+        .evidence(Evidence::Field {
+            name: "certificate entries",
+            value: sig.certificates.len().to_string(),
+        }),
+        _ => {
+            let mut f = Finding::new(
+                "PE-SIGNATURE-MALFORMED",
+                Severity::Low,
+                Category::Anomaly,
+                "Certificate table is malformed",
+            )
+            .detail(
+                "The file carries a certificate table that cannot be a valid Authenticode \
+                 signature: a fake or damaged signature, or data hidden behind the \
+                 SECURITY directory.",
+            )
+            .evidence(location);
+            for p in &sig.problems {
+                f = f.evidence(Evidence::Field {
+                    name: "problem",
+                    value: p.clone(),
+                });
+            }
+            f
+        }
+    }
+}
+
 /// DER SEQUENCE whose first bytes carry the signedData OID.
 fn looks_like_signed_data(blob: &[u8]) -> bool {
     blob.first() == Some(&0x30)
@@ -203,6 +254,83 @@ mod tests {
         assert_eq!(s.certificates.len(), 1);
         assert_eq!(s.certificates[0].kind, "pkcs_signed_data");
         assert_eq!(s.offset as usize, built.layout.certificate_offset.unwrap());
+    }
+
+    fn ids(r: &Report) -> Vec<&'static str> {
+        r.findings
+            .iter()
+            .map(|f| f.id)
+            .filter(|id| id.starts_with("PE-SIGN"))
+            .collect()
+    }
+
+    #[test]
+    fn signed_is_info_and_scores_nothing() {
+        let r = analyze(
+            PeBuilder::minimal(Arch::X64)
+                .certificate(pkcs7_blob())
+                .build()
+                .bytes,
+        );
+        assert_eq!(ids(&r), ["PE-SIGNED"]);
+        let e = r
+            .risk
+            .breakdown
+            .iter()
+            .find(|e| e.id == "PE-SIGNED")
+            .unwrap();
+        assert_eq!(e.points, 0);
+    }
+
+    #[test]
+    fn signing_does_not_lower_the_score() {
+        let inject = [
+            "OpenProcess",
+            "VirtualAllocEx",
+            "WriteProcessMemory",
+            "CreateRemoteThread",
+        ];
+        let plain = analyze(
+            PeBuilder::minimal(Arch::X64)
+                .import("KERNEL32.dll", &inject)
+                .build()
+                .bytes,
+        );
+        let signed = analyze(
+            PeBuilder::minimal(Arch::X64)
+                .import("KERNEL32.dll", &inject)
+                .certificate(pkcs7_blob())
+                .build()
+                .bytes,
+        );
+        assert_eq!(plain.risk.score, signed.risk.score);
+    }
+
+    #[test]
+    fn malformed_table_is_flagged() {
+        let r = analyze(
+            PeBuilder::minimal(Arch::X64)
+                .certificate(vec![0xAA; 200])
+                .build()
+                .bytes,
+        );
+        assert_eq!(ids(&r), ["PE-SIGNATURE-MALFORMED"]);
+        let f = r
+            .findings
+            .iter()
+            .find(|f| f.id == "PE-SIGNATURE-MALFORMED")
+            .unwrap();
+        assert_eq!(
+            (f.severity, f.confidence),
+            (Severity::Low, Confidence::Medium)
+        );
+        assert!(f.evidence.iter().any(|e| matches!(
+            e,
+            Evidence::Field {
+                name: "problem",
+                ..
+            }
+        )));
     }
 
     #[test]

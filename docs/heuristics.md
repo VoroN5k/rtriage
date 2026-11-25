@@ -102,7 +102,7 @@ necessarily causes are explained by it.
 - **What can be explained.** Only structural PE findings:
   `PE-SECTION-RWX`, `PE-SECTION-VIRTUAL-ONLY`, `PE-SECTION-HIGH-ENTROPY`,
   `PE-SECTION-NAME-UNUSUAL`, `PE-ENTRYPOINT-UNUSUAL`,
-  `PE-IMPORTS-DYNAMIC-RESOLUTION`, `PE-IMPORTS-FEW`, `PE-PACKED-LIKELY`.
+  `PE-IMPORTS-DYNAMIC-RESOLUTION`, `PE-IMPORTS-FEW`, `PE-PACKED-LIKELY`,
   **API behavior groups (`PE-API-*`) are never suppressed**: the loader
   rejects them, and the scorer skips them even if a rule slipped through.
 - **Effect.** A suppressed finding stays in `findings` with
@@ -128,6 +128,9 @@ necessarily causes are explained by it.
 | Confirmed UPX + TLS callbacks | 15 + 4 = 19 | low, `packed` |
 | Confirmed UPX + injection chain | 15 + 40 = 55 | medium, `packed` |
 | Spoofed UPX names on an RWX + dynamic-resolution file | nothing suppressed | full score |
+| Confirmed UPX + encrypted `RT_RCDATA` | 15 (resource finding explained) | low, `packed` |
+| Reflective-loader DLL + injection chain | 40 + 40, injection cap 40 | medium or above |
+| Any file, signed vs. unsigned | identical score | unchanged |
 
 These scenarios are end-to-end tests in `scoring.rs` (`end_to_end`).
 
@@ -409,7 +412,7 @@ A certificate entry pointing past EOF is ignored rather than trusted.
 |---|---|---|---|---|
 | `PE-OVERLAY` | Info / High | 0 | `anomaly` | Overlay present. Evidence: `range`, `field kind`. |
 | `PE-OVERLAY-HIGH-ENTROPY` | Low / Medium | 4 | `packing` | Overlay of at least `section_entropy_min_size` bytes with entropy >= `entropy_high`, **and** `kind` is not a compressed format (`zip`, `7z`, `rar`, `cab`, `gzip`, `nsis`, `png`, `jpeg`, `gif`), whose own compression explains the entropy. Evidence: `range`, `metric entropy`. |
-| `PE-OVERLAY-EMBEDDED-PE` | Medium / Medium | 11 | `anomaly` | Overlay starts with a valid PE (`MZ` + `PE\0\0` at `e_lfanew`). Evidence: `range`. |
+| `PE-OVERLAY-EMBEDDED-PE` | Medium / Low | 6 | `anomaly` | Overlay starts with a valid PE (`MZ` + `PE\0\0` at `e_lfanew`). Evidence: `range`. |
 
 **False positives.** Installers and self-extractors (overlay with
 compressed data, often in a custom format: high entropy). Embedded PEs:
@@ -500,6 +503,82 @@ tools, commercial protectors for licensing/DRM).
 the shape: compressed code, minimal imports.
 **False positives.** Small programs embedding encrypted/compressed blobs in
 their code section. Low confidence for that reason.
+
+### PE Rich header (`pe-rich` analyzer)
+
+Searched in `0x40..min(e_lfanew, 4 KiB)`; records are XOR-decoded with the
+key that follows `Rich`. The key doubles as a checksum: `DanS` offset + every
+byte before `DanS` rotated left by its offset (skipping `e_lfanew` at
+0x3c..0x40) + every `comp_id` rotated left by its count, mod 2^32.
+
+| ID | Sev / Conf | Points | Category | Trigger |
+|---|---|---|---|---|
+| `PE-RICH-CHECKSUM-MISMATCH` | Low / Medium | 4 | `anomaly` | Rich header present, recomputed checksum ≠ stored key. Evidence: `field stored key`, `field computed`. |
+| `PE-RICH-ABSENT` | Info / Low | 0 | `metadata` | No Rich header, `MajorLinkerVersion` in 6..=14 (MSVC range), not managed .NET. Evidence: `field MajorLinkerVersion`. |
+
+**Rationale.** An edited Rich header means the build-tool fingerprint was
+altered after linking, e.g. to plant a false flag (Olympic Destroyer). A
+missing one on an MSVC-looking binary means it was stripped.
+**False positives.** Mismatch: patchers that touch the DOS header area.
+Absent: `lld-link` (Rust with lld, Clang) writes linker version 14 without a
+Rich header; the C# compiler writes none either (managed .NET is skipped).
+Go (linker 3.x), MinGW (2.x) and Delphi are outside the MSVC range.
+
+### PE exports (`pe-exports` analyzer)
+
+Bounded parser: `NumberOfFunctions` and `NumberOfNames` are each capped at
+`max_exports`; every array must map contiguously into one section; a name
+whose ordinal index is out of range is ignored. Forwarders are addresses
+inside the export directory, read as `DLL.Function` strings.
+
+| ID | Sev / Conf | Points | Category | ATT&CK | Trigger |
+|---|---|---|---|---|---|
+| `PE-EXPORTS-REFLECTIVE-LOADER` | High / High | 40 | `injection` | T1620 | An export named **exactly** `ReflectiveLoader`, `_ReflectiveLoader@0` or `_ReflectiveLoader@4`. No substring or case-insensitive matching. Evidence: `field export`. |
+| `PE-EXPORTS-ALL-FORWARDED` | Low / Low | 2 | `anomaly` | T1574.002 | A DLL with at least 5 exports, all forwarded (table not limit-truncated). Evidence: count and up to 5 forwarders. |
+| `PE-EXPORTS-NAME-MISMATCH` | Info / Medium | 0 | `anomaly` | | Export directory DLL name ≠ file name (case-insensitive). Skipped when the file is named like a hash (32/40/64 hex digits before the first dot), as sample stores do. Evidence: both names. |
+
+**Rationale.** `ReflectiveLoader` is the self-mapping entry point of the
+reflective DLL injection technique used by Metasploit, Cobalt Strike and
+their derivatives; with exact names it is near-certain. All-forwarding DLLs
+are proxies for DLL side-loading. A renamed DLL may be posing as another.
+**False positives.** Reflective loader: red-team and research builds
+(still offensive tooling). Proxies: compatibility shims, game mods,
+`api-ms-win-*`-style forwarders. Name mismatch: DLLs renamed by installers.
+Reflective loader and `PE-API-INJECTION` share the `injection` cap (40), so a
+reflective DLL that also imports the injection chain scores 40 for both.
+
+### PE resources (`pe-resources` analyzer)
+
+Bounded walk: depth 3 (type / name / language), each directory offset
+visited once (cycles and shared subdirectories cannot loop or multiply
+work), at most `max_resources` (4096) leaves, one budget step per entry.
+
+| ID | Sev / Conf | Points | Category | Trigger |
+|---|---|---|---|---|
+| `PE-RESOURCE-EMBEDDED-PE` | Medium / Low | 6 | `anomaly` | A resource's data starts with a valid PE (`MZ` + `PE\0\0` at `e_lfanew`); same check and level as `PE-OVERLAY-EMBEDDED-PE`. Evidence: `field resource`. |
+| `PE-RESOURCE-HIGH-ENTROPY` | Low / Low | 2 | `packing` | A resource of at least `resource_entropy_min_size` (4096) bytes with entropy >= `entropy_high`, whose type is not image-like (`RT_ICON`, `RT_BITMAP`, `RT_CURSOR`, group/animated variants) and whose content is not a compressed format (`zip`, `png`, ...). Evidence: `field resource`, `metric entropy`. |
+
+**False positives.** Installers and driver packages embed executables;
+applications store compressed or encrypted data (licensing blobs, game
+assets) as `RT_RCDATA`. Confirmed UPX explains `PE-RESOURCE-HIGH-ENTROPY`
+(it compresses resources).
+
+### PE signature (`pe-signature` analyzer)
+
+Structure only: the SECURITY directory's file offset and size, 8-byte
+aligned `WIN_CERTIFICATE` entries (at most 16), known revision, and a DER
+PKCS#7 SignedData blob (OID `1.2.840.113549.1.7.2` in the first 32 bytes).
+**No cryptographic verification.**
+
+| ID | Sev / Conf | Points | Category | Trigger |
+|---|---|---|---|---|
+| `PE-SIGNED` | Info / High | 0 | `metadata` | Well-formed table with a SignedData entry: "signed (unverified)". Evidence: `range`, `field certificate entries`. |
+| `PE-SIGNATURE-MALFORMED` | Low / Medium | 4 | `anomaly` | Table present but past EOF, inside the image, with an invalid/zero length, unknown revision, or no SignedData. Evidence: `range`, one `field problem` per problem. |
+
+**A signature never lowers the risk.** It is not verified, and stolen or
+fraudulently obtained certificates are common; rewarding an unverified
+signature would give attackers a cheap way to whitewash a file. A test pins
+that signing a file leaves its score unchanged.
 
 ### Facts that suppress heuristics
 

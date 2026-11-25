@@ -10,7 +10,10 @@ helper.dll
   Risk     [CLEAN-LOOKING] score 0
 
 Findings
-  (none)
+  [INFO] PE-SIGNED  Signed (signature not verified)  (confidence: high, metadata)
+      An Authenticode certificate table with a PKCS#7 SignedData blob is present. rtriage does not verify signatures: the file may be unsigned in practice, re-signed or signed with a stolen certificate. This does not lower the risk.
+      - range 0x00000a00 (+608 bytes)
+      - certificate entries = 1
 
 PE
   Machine      amd64 (64-bit), dll, windows_cui

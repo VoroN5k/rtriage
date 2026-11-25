@@ -60,6 +60,9 @@ Findings
       The linker recorded where the PDB was written. Build paths often reveal user names, project names and directory layouts useful for attribution and for clustering samples from the same build environment.
       - PdbPath = C:\Users\dev\proj\Release\tool.pdb
       - user = dev
+  [INFO] PE-RICH-ABSENT  No Rich header despite an MSVC-style linker version  (confidence: low, metadata)
+      Microsoft's linker writes a Rich header; this file claims an MSVC linker version but has none, so it was stripped or built by another linker (lld-link writes version 14 without one).
+      - MajorLinkerVersion = 14
   [INFO] PE-SECTION-NAME-UNUSUAL  Unusual section name  (confidence: low, anomaly)
       Section names not produced by common toolchains (MSVC, Clang, GCC/MinGW, Delphi, Go, drivers). Often set by packers and protectors; also by custom linkers.
       - section #0 "UPX0"
@@ -77,6 +80,7 @@ Score breakdown  score 19 = sum of points below; level low
       +0  PE-ENTRYPOINT-UNUSUAL            anomaly            explained by UPX (PE-PACKER-KNOWN), not scored
       +0  PE-OVERLAY                       anomaly            informational
       +0  PE-PDB-PATH                      metadata           informational
+      +0  PE-RICH-ABSENT                   metadata           informational
       +0  PE-SECTION-NAME-UNUSUAL          anomaly            informational
 
 PE

@@ -23,6 +23,9 @@ Findings
   [INFO] PE-TIMESTAMP-ZERO  Link timestamp is zero  (confidence: medium, anomaly)
       TimeDateStamp was cleared. Common for Go binaries and some reproducible-build toolchains; also used to hide the build date.
       - TimeDateStamp = 0
+  [INFO] PE-RICH-ABSENT  No Rich header despite an MSVC-style linker version  (confidence: low, metadata)
+      Microsoft's linker writes a Rich header; this file claims an MSVC linker version but has none, so it was stripped or built by another linker (lld-link writes version 14 without one).
+      - MajorLinkerVersion = 14
 
 PE
   Machine      amd64 (64-bit), exe, windows_cui

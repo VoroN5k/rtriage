@@ -55,6 +55,8 @@ pub struct PeImage {
     pub is64: bool,
     /// `AddressOfEntryPoint`.
     pub entry_rva: u32,
+    /// `MajorLinkerVersion`.
+    pub major_linker_version: u8,
     /// `ImageBase`.
     pub image_base: u64,
     /// `SizeOfImage`.
@@ -335,6 +337,7 @@ pub fn parse(data: &[u8], limits: &Limits) -> Result<PeImage, AnalysisError> {
         characteristics: header.coff_header.characteristics,
         is64: optional.standard_fields.magic == 0x20b,
         entry_rva: optional.standard_fields.address_of_entry_point,
+        major_linker_version: optional.standard_fields.major_linker_version,
         image_base: w.image_base,
         size_of_image: w.size_of_image,
         size_of_headers: w.size_of_headers,

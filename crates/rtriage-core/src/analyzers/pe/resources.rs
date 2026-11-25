@@ -5,18 +5,22 @@
 //! cycles and shared subdirectories, at most `max_resources` leaves, and a
 //! budget step per entry.
 //!
-//! Facts only; findings are added once their IDs are agreed.
+//! Findings: `PE-RESOURCE-EMBEDDED-PE`, `PE-RESOURCE-HIGH-ENTROPY` (see `docs/heuristics.md`).
 
 use std::collections::BTreeSet;
 
-use super::overlay::content_kind;
+use super::overlay::{content_kind, COMPRESSED_KINDS};
 use super::{read_u16, read_u32, PeImage};
 use crate::analyzers::entropy::shannon_bounded;
 use crate::analyzers::{AnalysisContext, Analyzer};
+use crate::config::Thresholds;
 use crate::deadline::{Budget, Deadline};
 use crate::error::AnalysisError;
 use crate::limits::Limits;
-use crate::report::{Format, PeFacts, PeResource, PeResourcesFacts, ReportBuilder};
+use crate::report::{
+    Category, Confidence, Evidence, Finding, Format, PeFacts, PeResource, PeResourcesFacts,
+    ReportBuilder, Severity,
+};
 
 /// Data directory index of the resource table.
 const DIRECTORY_RESOURCE: usize = 2;
@@ -42,18 +46,101 @@ impl Analyzer for PeResourcesAnalyzer {
         let Some(pe) = super::pe_or_skip(ctx) else {
             return Ok(());
         };
-        let min_entropy_size = ctx.config.thresholds.section_entropy_min_size;
+        let t = &ctx.config.thresholds;
         if let Some(facts) = parse(
             pe,
             &ctx.input.data,
             &ctx.config.limits,
             &ctx.deadline,
-            min_entropy_size,
+            t.section_entropy_min_size,
         )? {
+            embedded_pe_finding(&facts, out);
+            high_entropy_finding(&facts, t, out);
             out.facts.pe.get_or_insert_with(PeFacts::default).resources = Some(facts);
         }
         Ok(())
     }
+}
+
+/// Image-like resource types: compressed pixel data is expected there.
+const IMAGE_TYPES: &[&str] = &[
+    "RT_CURSOR",
+    "RT_BITMAP",
+    "RT_ICON",
+    "RT_GROUP_CURSOR",
+    "RT_GROUP_ICON",
+    "RT_ANICURSOR",
+    "RT_ANIICON",
+];
+
+fn resource_ev(r: &PeResource) -> Evidence {
+    Evidence::Field {
+        name: "resource",
+        value: format!(
+            "{} / {} / {} ({} bytes at RVA 0x{:x})",
+            r.type_name, r.name, r.lang, r.size, r.rva
+        ),
+    }
+}
+
+fn embedded_pe_finding(facts: &PeResourcesFacts, out: &mut ReportBuilder) {
+    let hits: Vec<_> = facts
+        .entries
+        .iter()
+        .filter(|r| r.kind == Some("pe"))
+        .collect();
+    if hits.is_empty() {
+        return;
+    }
+    let mut f = Finding::new(
+        "PE-RESOURCE-EMBEDDED-PE",
+        Severity::Medium,
+        Category::Anomaly,
+        "Another executable is stored as a resource",
+    )
+    .confidence(Confidence::Low)
+    .detail(
+        "A resource holds a complete PE file: a second program carried as payload, \
+         typical of droppers. Installers and driver packages do this legitimately.",
+    );
+    for r in hits {
+        f = f.evidence(resource_ev(r));
+    }
+    out.push_finding(f);
+}
+
+fn high_entropy_finding(facts: &PeResourcesFacts, t: &Thresholds, out: &mut ReportBuilder) {
+    let hits: Vec<_> = facts
+        .entries
+        .iter()
+        .filter(|r| {
+            r.size as usize >= t.resource_entropy_min_size
+                && r.entropy.is_some_and(|e| e >= t.entropy_high)
+                && !IMAGE_TYPES.contains(&r.type_name.as_str())
+                && !r.kind.is_some_and(|k| COMPRESSED_KINDS.contains(&k))
+        })
+        .collect();
+    if hits.is_empty() {
+        return;
+    }
+    let mut f = Finding::new(
+        "PE-RESOURCE-HIGH-ENTROPY",
+        Severity::Low,
+        Category::Packing,
+        "Resource data looks encrypted",
+    )
+    .confidence(Confidence::Low)
+    .detail(
+        "A large resource has near-random content and is neither an image nor a \
+         recognised compressed format: often an encrypted payload or configuration.",
+    );
+    for r in hits {
+        f = f.evidence(resource_ev(r)).evidence(Evidence::Metric {
+            name: "entropy",
+            value: r.entropy.unwrap_or_default(),
+        });
+    }
+    out.push_finding(f);
 }
 
 struct Walk<'a> {
@@ -304,6 +391,75 @@ mod tests {
         );
         let kinds: Vec<_> = res(&r).unwrap().entries.iter().map(|e| e.kind).collect();
         assert_eq!(kinds, [Some("png"), Some("pe")]);
+    }
+
+    fn ids(r: &Report) -> Vec<&'static str> {
+        r.findings
+            .iter()
+            .map(|f| f.id)
+            .filter(|id| id.starts_with("PE-RESOURCE"))
+            .collect()
+    }
+
+    #[test]
+    fn embedded_pe_resource_is_medium_low() {
+        let inner = PeBuilder::minimal(Arch::X86).build().bytes;
+        let r = analyze(
+            PeBuilder::minimal(Arch::X64)
+                .resource(ResourceSpec::new(10, 1, inner))
+                .build()
+                .bytes,
+        );
+        assert_eq!(ids(&r), ["PE-RESOURCE-EMBEDDED-PE"]);
+        let f = r
+            .findings
+            .iter()
+            .find(|f| f.id == "PE-RESOURCE-EMBEDDED-PE")
+            .unwrap();
+        assert_eq!(
+            (f.severity, f.confidence),
+            (
+                crate::report::Severity::Medium,
+                crate::report::Confidence::Low
+            )
+        );
+    }
+
+    #[test]
+    fn mz_without_pe_header_is_not_embedded_pe() {
+        let r = analyze(
+            PeBuilder::minimal(Arch::X64)
+                .resource(ResourceSpec::new(10, 1, b"MZ just two letters".to_vec()))
+                .build()
+                .bytes,
+        );
+        assert!(ids(&r).is_empty());
+    }
+
+    #[test]
+    fn encrypted_rcdata_is_high_entropy() {
+        let r = analyze(
+            PeBuilder::minimal(Arch::X64)
+                .resource(ResourceSpec::new(10, 7, uniform(8192)))
+                .build()
+                .bytes,
+        );
+        assert_eq!(ids(&r), ["PE-RESOURCE-HIGH-ENTROPY"]);
+    }
+
+    #[test]
+    fn icons_compressed_formats_and_small_blobs_are_not_high_entropy() {
+        let mut zip = b"PK\x03\x04".to_vec();
+        zip.extend(uniform(8192));
+        let r = analyze(
+            PeBuilder::minimal(Arch::X64)
+                .resource(ResourceSpec::new(3, 1, uniform(8192))) // RT_ICON
+                .resource(ResourceSpec::new(10, 2, zip)) // zip in RCDATA
+                .resource(ResourceSpec::new(10, 3, uniform(2048))) // under 4 KiB
+                .build()
+                .bytes,
+        );
+        assert!(ids(&r).is_empty(), "{:?}", ids(&r));
     }
 
     #[test]

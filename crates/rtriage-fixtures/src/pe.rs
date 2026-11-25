@@ -278,6 +278,7 @@ pub struct PeBuilder {
     dll: bool,
     subsystem: u16,
     timestamp: u32,
+    linker_version: u8,
     checksum: Checksum,
     image_base: u64,
     entry: Entry,
@@ -303,6 +304,7 @@ impl PeBuilder {
             dll: false,
             subsystem: subsystem::WINDOWS_CUI,
             timestamp: 0x5f5e_1000,
+            linker_version: 14,
             checksum: Checksum::Zero,
             image_base: arch.default_image_base(),
             entry: Entry::FirstExecutable,
@@ -338,6 +340,12 @@ impl PeBuilder {
     #[must_use]
     pub fn subsystem(mut self, subsystem: u16) -> Self {
         self.subsystem = subsystem;
+        self
+    }
+    /// Sets `MajorLinkerVersion` (default 14, MSVC 2015 and later).
+    #[must_use]
+    pub fn linker_version(mut self, major: u8) -> Self {
+        self.linker_version = major;
         self
     }
     /// Sets COFF `TimeDateStamp`.
@@ -561,7 +569,7 @@ impl PeBuilder {
             .sum();
         let entry_rva = self.entry_rva(&layouts);
         put_u16(&mut f, o, if arch.is64() { 0x20b } else { 0x10b });
-        f[o + 2] = 14; // MajorLinkerVersion
+        f[o + 2] = self.linker_version; // MajorLinkerVersion
         put_u32(&mut f, o + 4, code_size);
         put_u32(&mut f, o + 16, entry_rva);
         put_u32(&mut f, o + 20, self.first_exec_rva(&layouts));
@@ -1199,6 +1207,7 @@ pub mod profiles {
         rdata.extend_from_slice(&[0u8; 256]);
         PeBuilder::new(arch)
             .timestamp(0)
+            .linker_version(3) // Go's internal linker writes 3.0
             .section(Section::code(".text", text))
             .section(Section::rdata(".rdata", rdata))
             .section(Section::data(".data", vec![0u8; 256]))

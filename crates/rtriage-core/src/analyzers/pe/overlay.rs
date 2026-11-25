@@ -97,6 +97,7 @@ impl Analyzer for PeOverlayAnalyzer {
                     Category::Anomaly,
                     "Another executable is appended to this one",
                 )
+                .confidence(Confidence::Low)
                 .detail(
                     "The overlay starts with a complete PE header: a second program \
                      carried as payload, typical of droppers and binders.",
@@ -272,7 +273,16 @@ mod tests {
         let inner = PeBuilder::minimal(Arch::X86).build().bytes;
         let r = analyze(PeBuilder::minimal(Arch::X64).overlay(inner).build().bytes);
         assert_eq!(overlay(&r).unwrap().kind, Some("pe"));
-        assert!(ids(&r).contains(&"PE-OVERLAY-EMBEDDED-PE"));
+        let f = r
+            .findings
+            .iter()
+            .find(|f| f.id == "PE-OVERLAY-EMBEDDED-PE")
+            .unwrap();
+        // Same level as PE-RESOURCE-EMBEDDED-PE.
+        assert_eq!(
+            (f.severity, f.confidence),
+            (Severity::Medium, Confidence::Low)
+        );
     }
 
     #[test]

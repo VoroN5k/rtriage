@@ -29,4 +29,5 @@ explains = [
     "PE-ENTRYPOINT-UNUSUAL",     # entry point is the decompressor stub in UPX1
     "PE-IMPORTS-DYNAMIC-RESOLUTION", # stub rebuilds the import table itself
     "PE-IMPORTS-FEW",            # minimal stub import set
+    "PE-RESOURCE-HIGH-ENTROPY",  # UPX compresses resources too
 ]

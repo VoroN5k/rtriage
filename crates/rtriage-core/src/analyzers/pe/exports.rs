@@ -4,14 +4,20 @@
 //! capped at `max_exports`, every array must map contiguously into one
 //! section's raw data, and every element costs a budget step.
 //!
-//! Facts only; findings are added once their IDs are agreed.
+//! Findings: `PE-EXPORTS-REFLECTIVE-LOADER`, `PE-EXPORTS-ALL-FORWARDED`,
+//! `PE-EXPORTS-NAME-MISMATCH` (see `docs/heuristics.md`).
 
 use super::{read_u16, read_u32, PeImage};
 use crate::analyzers::{AnalysisContext, Analyzer};
 use crate::deadline::Deadline;
 use crate::error::AnalysisError;
 use crate::limits::Limits;
-use crate::report::{Format, PeExport, PeExportsFacts, PeFacts, ReportBuilder};
+use std::path::Path;
+
+use crate::report::{
+    Category, Confidence, Evidence, Finding, Format, PeExport, PeExportsFacts, PeFacts,
+    ReportBuilder, Severity,
+};
 
 /// Data directory index of the export table.
 const DIRECTORY_EXPORT: usize = 0;
@@ -36,10 +42,133 @@ impl Analyzer for PeExportsAnalyzer {
             return Ok(());
         };
         if let Some(facts) = parse(pe, &ctx.input.data, &ctx.config.limits, &ctx.deadline)? {
+            reflective_loader_finding(&facts, out);
+            if pe.characteristics & FILE_DLL != 0 {
+                all_forwarded_finding(&facts, out);
+            }
+            name_mismatch_finding(&facts, &ctx.input.path, out);
             out.facts.pe.get_or_insert_with(PeFacts::default).exports = Some(facts);
         }
         Ok(())
     }
+}
+
+/// `IMAGE_FILE_DLL`.
+const FILE_DLL: u16 = 0x2000;
+/// Exact export names of Stephen Fewer's reflective DLL loader (x64
+/// undecorated, x86 `__stdcall` decorations). No substring matching.
+const REFLECTIVE_LOADER_NAMES: &[&str] = &[
+    "ReflectiveLoader",
+    "_ReflectiveLoader@0",
+    "_ReflectiveLoader@4",
+];
+/// A proxy DLL forwards everything; fewer exports than this is not judged.
+const ALL_FORWARDED_MIN: usize = 5;
+
+fn reflective_loader_finding(facts: &PeExportsFacts, out: &mut ReportBuilder) {
+    let Some(e) = facts.exports.iter().find(|e| {
+        e.name
+            .as_deref()
+            .is_some_and(|n| REFLECTIVE_LOADER_NAMES.contains(&n))
+    }) else {
+        return;
+    };
+    out.push_finding(
+        Finding::new(
+            "PE-EXPORTS-REFLECTIVE-LOADER",
+            Severity::High,
+            Category::Injection,
+            "Exports a reflective DLL loader",
+        )
+        .confidence(Confidence::High)
+        .detail(
+            "The DLL exports ReflectiveLoader, the entry point that maps the DLL into \
+             memory by itself so it can be injected without LoadLibrary. Characteristic \
+             of offensive frameworks (Metasploit, Cobalt Strike and their derivatives).",
+        )
+        .evidence(Evidence::Field {
+            name: "export",
+            value: format!("#{} {}", e.ordinal, e.name.as_deref().unwrap_or_default()),
+        })
+        .attack("T1620"),
+    );
+}
+
+fn all_forwarded_finding(facts: &PeExportsFacts, out: &mut ReportBuilder) {
+    let n = facts.exports.len();
+    if n < ALL_FORWARDED_MIN
+        || facts.limit_reached
+        || facts.exports.iter().any(|e| e.forwarder.is_none())
+    {
+        return;
+    }
+    let mut f = Finding::new(
+        "PE-EXPORTS-ALL-FORWARDED",
+        Severity::Low,
+        Category::Anomaly,
+        "Every export is forwarded to another DLL",
+    )
+    .confidence(Confidence::Low)
+    .detail(
+        "A DLL that only forwards calls elsewhere is a proxy: placed under a trusted \
+         DLL's name it gets loaded instead of the original (DLL side-loading) while \
+         passing calls through. Compatibility shims and game mods do the same.",
+    )
+    .evidence(Evidence::Field {
+        name: "forwarded exports",
+        value: n.to_string(),
+    })
+    .attack("T1574.002");
+    for e in facts.exports.iter().take(5) {
+        f = f.evidence(Evidence::Field {
+            name: "forwarder",
+            value: format!(
+                "{} -> {}",
+                e.name.as_deref().unwrap_or("(ordinal)"),
+                e.forwarder.as_deref().unwrap_or_default()
+            ),
+        });
+    }
+    out.push_finding(f);
+}
+
+fn name_mismatch_finding(facts: &PeExportsFacts, path: &Path, out: &mut ReportBuilder) {
+    let (Some(internal), Some(file)) = (
+        facts.dll_name.as_deref(),
+        path.file_name().map(|n| n.to_string_lossy()),
+    ) else {
+        return;
+    };
+    if internal.eq_ignore_ascii_case(&file) || looks_like_hash_name(&file) {
+        return;
+    }
+    out.push_finding(
+        Finding::new(
+            "PE-EXPORTS-NAME-MISMATCH",
+            Severity::Info,
+            Category::Anomaly,
+            "File name differs from the DLL's internal name",
+        )
+        .detail(
+            "The export directory records the name the DLL was built as. A different \
+             file name means it was renamed afterwards, e.g. to pose as another DLL.",
+        )
+        .evidence(Evidence::Field {
+            name: "internal name",
+            value: internal.to_owned(),
+        })
+        .evidence(Evidence::Field {
+            name: "file name",
+            value: file.into_owned(),
+        }),
+    );
+}
+
+/// Sample stores name files by MD5 / SHA-1 / SHA-256: a mismatch there says
+/// nothing about the sample.
+fn looks_like_hash_name(file: &str) -> bool {
+    let stem = file.split('.').next().unwrap_or(file);
+    matches!(stem.len(), 32 | 40 | 64) && stem.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Parses the export directory; `Ok(None)` without one.
@@ -223,6 +352,104 @@ mod tests {
                     (4, Some("OpenFile"), Some("KERNEL32.CreateFileW")),
                 ]
             );
+        }
+    }
+
+    fn analyze_named(path: &str, bytes: Vec<u8>) -> Report {
+        Registry::default().analyze(&Input::from_bytes(path, bytes), &Config::default())
+    }
+
+    fn ids(r: &Report) -> Vec<&'static str> {
+        r.findings
+            .iter()
+            .map(|f| f.id)
+            .filter(|id| id.starts_with("PE-EXPORTS"))
+            .collect()
+    }
+
+    #[test]
+    fn reflective_loader_exact_names() {
+        for name in [
+            "ReflectiveLoader",
+            "_ReflectiveLoader@4",
+            "_ReflectiveLoader@0",
+        ] {
+            let r = analyze_named(
+                "helper.dll",
+                dll(vec![ExportSpec::named(name)]).build().bytes,
+            );
+            assert_eq!(ids(&r), ["PE-EXPORTS-REFLECTIVE-LOADER"], "{name}");
+            let f = &r
+                .findings
+                .iter()
+                .find(|f| f.id == "PE-EXPORTS-REFLECTIVE-LOADER")
+                .unwrap();
+            assert_eq!(
+                (f.severity, f.confidence),
+                (Severity::High, Confidence::High)
+            );
+            assert_eq!(f.attack, ["T1620"]);
+        }
+    }
+
+    #[test]
+    fn reflective_loader_lookalikes_do_not_match() {
+        for name in [
+            "ReflectiveLoaderHelper",
+            "reflectiveloader",
+            "MyReflectiveLoader",
+            "Loader",
+        ] {
+            let r = analyze_named(
+                "helper.dll",
+                dll(vec![ExportSpec::named(name)]).build().bytes,
+            );
+            assert!(ids(&r).is_empty(), "{name}: {:?}", ids(&r));
+        }
+    }
+
+    #[test]
+    fn proxy_dll_all_forwarded() {
+        let specs = (0..6)
+            .map(|i| ExportSpec::forward(&format!("F{i}"), &format!("orig.F{i}")))
+            .collect();
+        let r = analyze_named("helper.dll", dll(specs).build().bytes);
+        assert_eq!(ids(&r), ["PE-EXPORTS-ALL-FORWARDED"]);
+    }
+
+    #[test]
+    fn partly_forwarded_or_tiny_dll_is_not_proxy() {
+        let mut specs: Vec<_> = (0..6)
+            .map(|i| ExportSpec::forward(&format!("F{i}"), &format!("orig.F{i}")))
+            .collect();
+        specs.push(ExportSpec::named("Own"));
+        let r = analyze_named("helper.dll", dll(specs).build().bytes);
+        assert!(ids(&r).is_empty());
+        let few = (0..3)
+            .map(|i| ExportSpec::forward(&format!("F{i}"), "orig.F"))
+            .collect();
+        assert!(ids(&analyze_named("helper.dll", dll(few).build().bytes)).is_empty());
+    }
+
+    #[test]
+    fn renamed_dll_is_name_mismatch() {
+        let r = analyze_named(
+            r"C:\Windows\System32\version.dll",
+            dll(vec![ExportSpec::named("A")]).build().bytes,
+        );
+        assert_eq!(ids(&r), ["PE-EXPORTS-NAME-MISMATCH"]);
+    }
+
+    #[test]
+    fn same_name_any_case_or_hash_named_sample_is_fine() {
+        for path in [
+            "HELPER.DLL",
+            "helper.dll",
+            "d41d8cd98f00b204e9800998ecf8427e.bin",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ] {
+            let r = analyze_named(path, dll(vec![ExportSpec::named("A")]).build().bytes);
+            assert!(ids(&r).is_empty(), "{path}");
         }
     }
 
