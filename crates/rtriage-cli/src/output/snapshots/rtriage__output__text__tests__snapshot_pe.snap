@@ -1,0 +1,34 @@
+---
+source: crates/rtriage-cli/src/output/text.rs
+expression: "render_string(&Run { reports: vec![report], failures: vec![], }, PLAIN)"
+---
+sample.exe
+  Type     PE                         Size  1 536 bytes (1.5 KiB)
+  MD5      75eff2506ec6599c40b4e831b5c77952
+  SHA-1    1b5ababe983d97c09175e9e78bfd6077e0424a6e
+  SHA-256  2bcd1b6b1a93bde08f14185ce8594f65419ca5d2b2365e00c14802b4a8776c3e
+  Risk     [CLEAN-LOOKING] score 0
+
+Findings
+  [INFO] PE-CHECKSUM-MISMATCH  Image checksum does not match  (confidence: medium, anomaly)
+      The stored checksum does not match the file. Windows ignores it for user-mode images, but it shows the file changed after linking (patching, appended data, resigning).
+      - CheckSum = 0x00001234
+      - computed = 0x00001083
+  [INFO] PE-TIMESTAMP-ZERO  Link timestamp is zero  (confidence: medium, anomaly)
+      TimeDateStamp was cleared. Common for Go binaries and some reproducible-build toolchains; also used to hide the build date.
+      - TimeDateStamp = 0
+
+PE
+  Machine      amd64 (64-bit), exe, windows_cui
+  Entry point  0x00001000 in #0 ".text"
+  Image base   0x140000000
+  Timestamp    0 (cleared)
+  Checksum     0x00001234 (MISMATCH; computed 0x00001083)
+  DLL flags    high_entropy_va, dynamic_base, nx_compat, terminal_server_aware
+
+Entropy
+  Whole file  0.635 bits/byte
+  No high-entropy regions (>= 7.20, window 4096)
+
+Strings  2 found (ASCII + UTF-16LE, min 5), 0 classified
+  (no classified strings; use --all-strings to list all)

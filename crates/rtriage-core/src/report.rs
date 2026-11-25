@@ -53,6 +53,101 @@ pub struct Facts {
     pub entropy: Option<EntropyFacts>,
     /// Extracted strings; `None` until the strings analyzer has run.
     pub strings: Option<StringsFacts>,
+    /// PE-specific facts; `None` for non-PE input.
+    pub pe: Option<PeFacts>,
+}
+
+/// PE facts. Each part is filled by its own analyzer and is `None` if that
+/// analyzer did not run or failed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct PeFacts {
+    /// COFF / optional header summary.
+    pub headers: Option<PeHeaderFacts>,
+}
+
+/// Kind of PE image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeKind {
+    /// Executable.
+    Exe,
+    /// Dynamic-link library (`IMAGE_FILE_DLL`).
+    Dll,
+    /// Subsystem `NATIVE`: kernel driver, or a native-mode image such as `smss.exe`.
+    Driver,
+}
+
+/// Summary of the PE headers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PeHeaderFacts {
+    /// Machine name (`i386`, `amd64`, `arm64`, ... or `unknown_0x....`).
+    pub machine: String,
+    /// Raw COFF `Machine` value.
+    pub machine_raw: u16,
+    /// 32 (PE32) or 64 (PE32+), from the optional header magic.
+    pub bits: u8,
+    /// EXE, DLL or driver.
+    pub kind: PeKind,
+    /// Subsystem name (`windows_gui`, `windows_cui`, `native`, ...).
+    pub subsystem: String,
+    /// Raw `Subsystem` value.
+    pub subsystem_raw: u16,
+    /// Names of set COFF `Characteristics` flags, in bit order.
+    pub characteristics: Vec<&'static str>,
+    /// Names of set `DllCharacteristics` flags, in bit order.
+    pub dll_characteristics: Vec<&'static str>,
+    /// Entry point; `None` when `AddressOfEntryPoint` is 0 (e.g. resource-only DLLs).
+    pub entry_point: Option<PeEntryPoint>,
+    /// Preferred load address.
+    pub image_base: u64,
+    /// `SizeOfImage`.
+    pub size_of_image: u32,
+    /// COFF `NumberOfSections`.
+    pub number_of_sections: u16,
+    /// Link timestamp.
+    pub timestamp: PeTimestamp,
+    /// Stored vs. computed image checksum.
+    pub checksum: PeChecksum,
+    /// `true` if a CLR (COM descriptor) data directory is present: a managed
+    /// .NET assembly. Native-code heuristics (few imports, entry stub) do not
+    /// apply to such files.
+    pub managed_dotnet: bool,
+}
+
+/// Where the entry point is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PeEntryPoint {
+    /// `AddressOfEntryPoint`.
+    pub rva: u32,
+    /// Section containing it, if any.
+    pub section: Option<SectionRef>,
+}
+
+/// Reference to a section by index and name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SectionRef {
+    /// Index in the section table.
+    pub index: usize,
+    /// Section name (raw attacker data: sanitize before display).
+    pub name: String,
+}
+
+/// COFF `TimeDateStamp`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PeTimestamp {
+    /// Raw seconds since the Unix epoch.
+    pub raw: u32,
+    /// ISO 8601 UTC rendering, e.g. `2020-09-13T12:26:40Z`; `None` when `raw` is 0.
+    pub utc: Option<String>,
+}
+
+/// Optional header `CheckSum`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PeChecksum {
+    /// Value stored in the header (0 = not set).
+    pub stored: u32,
+    /// Value computed over the file.
+    pub computed: u32,
 }
 
 /// Result of string extraction.

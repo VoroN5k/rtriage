@@ -89,3 +89,64 @@ games, UPX-compressed tools), and a packed file deserves a look, not an alarm.
 ## Finding catalogue
 
 Entries are added as analyzers land (M2 steps 2–6).
+
+### PE headers (`pe-headers` analyzer)
+
+#### `PE-TIMESTAMP-ZERO`
+
+| | |
+|---|---|
+| Severity / confidence | Info / Medium (0 points) |
+| Category | `anomaly` |
+| Trigger | COFF `TimeDateStamp == 0`. |
+| Evidence | `field TimeDateStamp = 0` |
+
+**Rationale.** Clearing the link time hides when a sample was built; it is
+context for the analyst, not a judgment.
+**False positives.** Go binaries always have a zero timestamp; some
+reproducible-build pipelines clear it too. Hence Info only.
+
+#### `PE-TIMESTAMP-FUTURE`
+
+| | |
+|---|---|
+| Severity / confidence | Low / Low (2 points) |
+| Category | `anomaly` |
+| Trigger | `TimeDateStamp` > analysis time + 24 h. |
+| Evidence | `field TimeDateStamp = 0x… (ISO 8601 UTC)` |
+
+**Rationale.** A forged build date is a weak anti-forensics signal.
+**False positives.** MSVC `/Brepro` (reproducible builds) stores a hash
+instead of a time, which is frequently "in the future". Hence Low/Low.
+**Not flagged:** old-but-plausible dates. Borland Delphi linkers write the
+constant `0x2A425E19` (1992-06-19), so "too old" would mostly hit Delphi.
+
+#### `PE-CHECKSUM-MISMATCH`
+
+| | |
+|---|---|
+| Severity / confidence | Info / Medium (0 points) for normal images; Low / High (5 points) for drivers |
+| Category | `anomaly` |
+| Trigger | Normal image: stored `CheckSum` **non-zero** and ≠ computed. Driver (subsystem `native`): stored `CheckSum` is 0 **or** ≠ computed. |
+| Evidence | `field CheckSum`, `field computed` |
+
+**Rationale.** The loader ignores the checksum for user-mode images, so a
+mismatch there only shows the file changed after linking. The kernel requires
+a correct checksum for drivers, so a bad one is a stronger tampering signal.
+**False positives.** Normal images with a checksum of 0 are the default for
+most linkers and are **never** flagged. Signing tools and some installers
+patch files after linking. Native user-mode images (`smss.exe`, `autochk.exe`)
+share the `native` subsystem with drivers and are treated as drivers.
+**Algorithm.** Same as `CheckSumMappedFile`: 16-bit folded sum of the file
+with the 4-byte `CheckSum` field read as zero, plus the file length.
+
+### Facts that suppress heuristics
+
+- `facts.pe.headers.managed_dotnet`: set when the CLR (COM descriptor) data
+  directory is present. Managed assemblies legitimately have a single import
+  (`mscoree.dll!_CorExeMain`) and a tiny native entry stub, so import-count
+  and entry-point heuristics (steps 3–4) must not fire on them. Covered by
+  the `.NET-like` negative fixture profile.
+- The `Go-like` negative fixture profile (zero timestamp, `.symtab`, Go build
+  ID, kernel32 runtime imports including thread-context and memory APIs) must
+  produce only informational findings.

@@ -25,6 +25,7 @@ expression: "serde_json::to_string_pretty(&v).unwrap()"
           "whole_file": 7.997997363186905,
           "window": 4096
         },
+        "pe": null,
         "strings": {
           "items": [
             {

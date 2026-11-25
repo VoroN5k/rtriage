@@ -200,3 +200,34 @@ fn layout_offsets_point_at_real_fields() {
         b".text"
     );
 }
+
+#[test]
+fn dotnet_profile_has_clr_header() {
+    use rtriage_fixtures::pe::profiles;
+    for arch in [Arch::X86, Arch::X64] {
+        let built = profiles::dotnet_like(arch).build();
+        let pe = PE::parse(&built.bytes).unwrap();
+        let clr = pe
+            .header
+            .optional_header
+            .unwrap()
+            .data_directories
+            .get_clr_runtime_header()
+            .copied()
+            .unwrap();
+        assert_eq!(clr.size, 72);
+        assert_eq!(pe.libraries, ["mscoree.dll"]);
+    }
+}
+
+#[test]
+fn go_profile_parses() {
+    use rtriage_fixtures::pe::profiles;
+    for arch in [Arch::X86, Arch::X64] {
+        let built = profiles::go_like(arch).build();
+        let pe = PE::parse(&built.bytes).unwrap();
+        assert_eq!(pe.header.coff_header.time_date_stamp, 0);
+        assert!(section_names(&pe).contains(&".symtab".to_owned()));
+        assert_eq!(pe.imports.len(), profiles::GO_KERNEL32_IMPORTS.len());
+    }
+}

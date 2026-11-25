@@ -27,6 +27,7 @@ const EXIT_RUNTIME_ERROR: u8 = 1;
 fn main() -> ExitCode {
     // clap exits with code 2 on usage errors.
     let cli = Cli::parse();
+    install_panic_hook();
     init_logging(&cli);
     match run(&cli) {
         Ok(code) => code,
@@ -141,6 +142,30 @@ fn render(cli: &Cli, run: &Run, out: &mut dyn Write, color: bool) -> io::Result<
         ),
         OutputFormat::Json => output::json::render(run, out),
     }
+}
+
+/// Replaces the default panic hook, which would print the panic payload
+/// (possibly containing file-derived text) to the terminal unescaped.
+/// Panics inside third-party parsers are caught by the core and reported as
+/// analysis errors; this hook only controls what reaches stderr.
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_owned())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "non-string panic payload".to_owned());
+        let location = info
+            .location()
+            .map(|l| format!(" at {}:{}", l.file(), l.line()))
+            .unwrap_or_default();
+        eprintln!(
+            "rtriage: internal panic{}: {}",
+            sanitize(&location),
+            sanitize(&payload)
+        );
+    }));
 }
 
 fn init_logging(cli: &Cli) {

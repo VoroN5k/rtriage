@@ -399,6 +399,7 @@ dependencies = [
  "clap",
  "insta",
  "rtriage-core",
+ "rtriage-fixtures",
  "serde",
  "serde_json",
  "tracing",
@@ -409,8 +410,10 @@ dependencies = [
 name = "rtriage-core"
 version = "0.1.0"
 dependencies = [
+ "goblin",
  "md-5",
  "regex",
+ "rtriage-fixtures",
  "serde",
  "serde_json",
  "sha1",

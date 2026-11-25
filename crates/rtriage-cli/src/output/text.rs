@@ -11,7 +11,7 @@ use anstyle::{AnsiColor, Style};
 use rtriage_core::report::{
     EntropyFacts, ExtractedString, StringEncoding, StringKind, StringsFacts,
 };
-use rtriage_core::{Evidence, Finding, Format, Report, RiskLevel, Severity};
+use rtriage_core::{Evidence, Finding, Format, PeHeaderFacts, Report, RiskLevel, Severity};
 use serde::Serialize;
 
 use super::{Failure, Run};
@@ -52,6 +52,9 @@ fn render_report(
 ) -> io::Result<()> {
     render_header(r, out, p)?;
     render_findings(&r.findings, out, p)?;
+    if let Some(h) = r.facts.pe.as_ref().and_then(|pe| pe.headers.as_ref()) {
+        render_pe_headers(h, out, p)?;
+    }
     if let Some(e) = &r.facts.entropy {
         render_entropy(e, out, p)?;
     }
@@ -295,6 +298,60 @@ fn severity_badge(s: Severity) -> (&'static str, AnsiColor) {
     }
 }
 
+fn render_pe_headers(h: &PeHeaderFacts, out: &mut dyn Write, p: &Painter) -> io::Result<()> {
+    writeln!(out, "\n{}", p.heading("PE"))?;
+    writeln!(
+        out,
+        "  Machine      {} ({}-bit), {}, {}",
+        h.machine,
+        h.bits,
+        enum_name(&h.kind),
+        h.subsystem
+    )?;
+    if h.managed_dotnet {
+        writeln!(out, "  Managed      .NET assembly (CLR header present)")?;
+    }
+    match &h.entry_point {
+        Some(ep) => match &ep.section {
+            Some(s) => writeln!(
+                out,
+                "  Entry point  0x{:08x} in #{} \"{}\"",
+                ep.rva,
+                s.index,
+                sanitize(&s.name)
+            )?,
+            None => writeln!(
+                out,
+                "  Entry point  0x{:08x} (outside all sections)",
+                ep.rva
+            )?,
+        },
+        None => writeln!(out, "  Entry point  none (AddressOfEntryPoint = 0)")?,
+    }
+    writeln!(out, "  Image base   0x{:x}", h.image_base)?;
+    match &h.timestamp.utc {
+        Some(utc) => writeln!(out, "  Timestamp    0x{:08x} ({utc})", h.timestamp.raw)?,
+        None => writeln!(out, "  Timestamp    0 (cleared)")?,
+    }
+    let c = &h.checksum;
+    let state = if c.stored == 0 {
+        "not set"
+    } else if c.stored == c.computed {
+        "valid"
+    } else {
+        "MISMATCH"
+    };
+    writeln!(
+        out,
+        "  Checksum     0x{:08x} ({state}; computed 0x{:08x})",
+        c.stored, c.computed
+    )?;
+    if !h.dll_characteristics.is_empty() {
+        writeln!(out, "  DLL flags    {}", h.dll_characteristics.join(", "))?;
+    }
+    Ok(())
+}
+
 fn format_name(f: Format) -> &'static str {
     match f {
         Format::Pe => "PE",
@@ -508,6 +565,44 @@ mod tests {
             PLAIN,
         );
         assert!(s.contains("+5 more"));
+    }
+
+    #[test]
+    fn snapshot_pe() {
+        use rtriage_fixtures::pe::{Arch, Checksum, PeBuilder};
+        let built = PeBuilder::minimal(Arch::X64)
+            .timestamp(0)
+            .checksum(Checksum::Value(0x1234))
+            .build();
+        let input = Input::from_bytes("sample.exe", built.bytes);
+        let mut report = Registry::default().analyze(&input, &Config::default());
+        prepare(&mut report, false);
+        insta::assert_snapshot!(render_string(
+            &Run {
+                reports: vec![report],
+                failures: vec![],
+            },
+            PLAIN
+        ));
+    }
+
+    #[test]
+    fn hostile_section_name_is_sanitized() {
+        use rtriage_fixtures::pe::{Arch, PeBuilder, Section};
+        let built = PeBuilder::new(Arch::X64)
+            .section(Section::code("\x1b[2J\x1b", vec![0xC3; 16]))
+            .build();
+        let input = Input::from_bytes("x.exe", built.bytes);
+        let report = Registry::default().analyze(&input, &Config::default());
+        let s = render_string(
+            &Run {
+                reports: vec![report],
+                failures: vec![],
+            },
+            PLAIN,
+        );
+        assert!(!s.contains('\x1b'));
+        assert!(s.contains("\\x1b[2J\\x1b"));
     }
 
     #[test]

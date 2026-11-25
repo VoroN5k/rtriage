@@ -215,6 +215,8 @@ pub struct PeBuilder {
     imports: Vec<(String, Vec<ImportEntry>)>,
     tls_callbacks: usize,
     pdb_path: Option<Vec<u8>>,
+    clr: bool,
+    auto_section_name: Vec<u8>,
     overlay: Vec<u8>,
 }
 
@@ -233,6 +235,8 @@ impl PeBuilder {
             imports: Vec::new(),
             tls_callbacks: 0,
             pdb_path: None,
+            clr: false,
+            auto_section_name: b".rdata".to_vec(),
             overlay: Vec::new(),
         }
     }
@@ -320,6 +324,19 @@ impl PeBuilder {
         self.pdb_path = Some(path.as_bytes().to_vec());
         self
     }
+    /// Adds a minimal CLR (COR20) header, making the image a managed .NET assembly.
+    #[must_use]
+    pub fn clr_header(mut self) -> Self {
+        self.clr = true;
+        self
+    }
+    /// Renames the auto-generated section holding imports/TLS/debug/CLR data
+    /// (default `.rdata`).
+    #[must_use]
+    pub fn auto_section_name(mut self, name: &str) -> Self {
+        self.auto_section_name = name.as_bytes().to_vec();
+        self
+    }
     /// Appends bytes after the last section (overlay).
     #[must_use]
     pub fn overlay(mut self, bytes: Vec<u8>) -> Self {
@@ -330,8 +347,10 @@ impl PeBuilder {
     /// Assembles the file.
     pub fn build(&self) -> BuiltPe {
         let arch = self.arch;
-        let has_auto =
-            !self.imports.is_empty() || self.tls_callbacks > 0 || self.pdb_path.is_some();
+        let has_auto = !self.imports.is_empty()
+            || self.tls_callbacks > 0
+            || self.pdb_path.is_some()
+            || self.clr;
         let n_sections = self.sections.len() + usize::from(has_auto);
 
         let coff_offset = PE_OFFSET + 4;
@@ -466,7 +485,7 @@ impl PeBuilder {
 
         // Section table + contents.
         let auto_section = auto.as_ref().map(|a| Section {
-            name: b".rdata".to_vec(),
+            name: self.auto_section_name.clone(),
             characteristics: scn::CNT_INITIALIZED_DATA | scn::MEM_READ,
             data: a.bytes.clone(),
             virtual_size: None,
@@ -624,6 +643,24 @@ impl PeBuilder {
             dirs.push((6, base_rva + entry as u32, 28)); // DEBUG
         }
 
+        if self.clr {
+            align8(&mut b);
+            // Tiny fake metadata root ("BSJB" signature) for the MetaData directory.
+            let metadata = b.len();
+            b.extend_from_slice(b"BSJB");
+            b.extend_from_slice(&[0; 12]);
+            let cor20 = b.len();
+            b.resize(cor20 + 72, 0);
+            put_u32(&mut b, cor20, 72); // cb
+            put_u16(&mut b, cor20 + 4, 2); // MajorRuntimeVersion
+            put_u16(&mut b, cor20 + 6, 5); // MinorRuntimeVersion
+            put_u32(&mut b, cor20 + 8, base_rva + metadata as u32); // MetaData.rva
+            put_u32(&mut b, cor20 + 12, 16); // MetaData.size
+            put_u32(&mut b, cor20 + 16, 1); // Flags: ILONLY
+            put_u32(&mut b, cor20 + 20, 0x0600_0001); // EntryPointToken
+            dirs.push((14, base_rva + cor20 as u32, 72)); // CLR runtime header
+        }
+
         AutoContent {
             bytes: b,
             directories: dirs,
@@ -754,5 +791,93 @@ fn pad2(b: &mut Vec<u8>) {
 fn align8(b: &mut Vec<u8>) {
     while !b.len().is_multiple_of(8) {
         b.push(0);
+    }
+}
+
+/// Benign look-alike profiles of common toolchains, used as negative tests:
+/// heuristics must not fire on them just because they look unusual.
+pub mod profiles {
+    use super::{Arch, PeBuilder, Section};
+
+    /// Managed .NET assembly: CLR header, a single import
+    /// (`mscoree.dll!_CorExeMain`), `.text` / `.rsrc` / `.reloc`.
+    pub fn dotnet_like(arch: Arch) -> PeBuilder {
+        // x86 entry stub: jmp dword ptr [IAT] (address irrelevant here).
+        let mut text = vec![0xFF, 0x25, 0x00, 0x20, 0x40, 0x00];
+        text.extend_from_slice(&[0u8; 250]);
+        PeBuilder::new(arch)
+            .subsystem(super::subsystem::WINDOWS_GUI)
+            .section(Section::code(".text", text))
+            .section(Section::rdata(".rsrc", vec![0u8; 128]))
+            .section(Section::rdata(".reloc", vec![0u8; 12]))
+            .import("mscoree.dll", &["_CorExeMain"])
+            .clr_header()
+    }
+
+    /// Kernel32 functions imported by the Go runtime on Windows. Includes
+    /// thread-context and memory APIs that look like injection/hollowing in
+    /// isolation.
+    pub const GO_KERNEL32_IMPORTS: &[&str] = &[
+        "AddVectoredExceptionHandler",
+        "CloseHandle",
+        "CreateEventA",
+        "CreateFileA",
+        "CreateIoCompletionPort",
+        "CreateThread",
+        "CreateWaitableTimerExW",
+        "DuplicateHandle",
+        "ExitProcess",
+        "FreeEnvironmentStringsW",
+        "GetConsoleMode",
+        "GetEnvironmentStringsW",
+        "GetProcAddress",
+        "GetProcessAffinityMask",
+        "GetQueuedCompletionStatusEx",
+        "GetStdHandle",
+        "GetSystemDirectoryA",
+        "GetSystemInfo",
+        "GetThreadContext",
+        "LoadLibraryExW",
+        "LoadLibraryW",
+        "PostQueuedCompletionStatus",
+        "ResumeThread",
+        "SetConsoleCtrlHandler",
+        "SetErrorMode",
+        "SetEvent",
+        "SetProcessPriorityBoost",
+        "SetThreadContext",
+        "SetUnhandledExceptionFilter",
+        "SetWaitableTimer",
+        "SuspendThread",
+        "SwitchToThread",
+        "TlsAlloc",
+        "VirtualAlloc",
+        "VirtualFree",
+        "VirtualQuery",
+        "WaitForMultipleObjects",
+        "WaitForSingleObject",
+        "WriteConsoleW",
+        "WriteFile",
+    ];
+
+    /// Statically linked Go executable: zero timestamp, `.symtab` section,
+    /// Go build ID, many runtime imports from kernel32 only.
+    pub fn go_like(arch: Arch) -> PeBuilder {
+        let mut text =
+            b"\xff Go build ID: \"Xb1aB2cD3eF4gH5iJ6kL/abcdefghij/klmnopqrst/uvwxyz0123\"\n \xff"
+                .to_vec();
+        text.extend_from_slice(&[0xCC; 512]);
+        let mut rdata = b"go1.22.5\0runtime.main\0runtime/internal/sys\0".to_vec();
+        rdata.extend_from_slice(&[0u8; 256]);
+        PeBuilder::new(arch)
+            .timestamp(0)
+            .section(Section::code(".text", text))
+            .section(Section::rdata(".rdata", rdata))
+            .section(Section::data(".data", vec![0u8; 256]))
+            .section(Section::rdata(".pdata", vec![0u8; 64]))
+            .section(Section::rdata(".xdata", vec![0u8; 64]))
+            .section(Section::rdata(".symtab", vec![0u8; 4]))
+            .import("kernel32.dll", GO_KERNEL32_IMPORTS)
+            .auto_section_name(".idata")
     }
 }

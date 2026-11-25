@@ -69,6 +69,26 @@ Every member is `null` if its analyzer did not run.
 | `items_included` | enum | `classified` (default: only strings with `kinds`) \| `all` (`--all-strings`). |
 | `items` | array | See below, sorted by offset. |
 
+**`pe`** (non-PE input: `null`). Each part is `null` if its analyzer failed.
+
+`pe.headers`:
+
+| Field | Type | Description |
+|---|---|---|
+| `machine` / `machine_raw` | string / integer | `i386`, `amd64`, `arm64`, ... or `unknown_0x....`; raw COFF value. |
+| `bits` | integer | `32` (PE32) or `64` (PE32+). |
+| `kind` | enum | `exe` \| `dll` \| `driver` (subsystem `native`). |
+| `subsystem` / `subsystem_raw` | string / integer | `windows_gui`, `windows_cui`, `native`, ...; raw value. |
+| `characteristics` | array of string | Set COFF flags, e.g. `executable_image`, `dll`. |
+| `dll_characteristics` | array of string | Set flags, e.g. `nx_compat`, `dynamic_base`, `guard_cf`. |
+| `entry_point` | object \| null | `{ rva, section: { index, name } \| null }`; `null` when `AddressOfEntryPoint` is 0. |
+| `image_base` | integer | Preferred load address. |
+| `size_of_image` | integer | `SizeOfImage`. |
+| `number_of_sections` | integer | COFF `NumberOfSections`. |
+| `timestamp` | object | `{ raw, utc }`, `utc` is ISO 8601 or `null` when `raw` is 0. |
+| `checksum` | object | `{ stored, computed }`. |
+| `managed_dotnet` | bool | CLR header present (managed .NET assembly). |
+
 String item: `offset` (integer), `encoding` (`ascii` \| `utf16_le`), `len`
 (characters, before truncation), `value` (raw text, JSON-escaped; **sanitize
 before displaying**), `truncated` (bool), `kinds` (array, omitted when empty).

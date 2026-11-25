@@ -8,6 +8,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+goblin = { version = "0.10.7", default-features = false, features = ["std", "pe32", "pe64"] }
 md-5 = "0.11.0"
 regex = "1.13.2"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -19,4 +20,5 @@ thiserror = "2.0.21"
 workspace = true
 
 [dev-dependencies]
+rtriage-fixtures = { path = "../rtriage-fixtures" }
 serde_json = "1.0.154"

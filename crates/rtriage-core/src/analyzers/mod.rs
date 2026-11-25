@@ -10,9 +10,11 @@
 
 pub mod entropy;
 pub mod hashes;
+pub mod pe;
 pub mod strings;
 
 use std::sync::OnceLock;
+use std::time::SystemTime;
 
 use crate::config::Config;
 use crate::deadline::Deadline;
@@ -30,7 +32,11 @@ pub struct AnalysisContext<'a> {
     pub config: &'a Config,
     /// Wall-clock deadline for this file.
     pub deadline: Deadline,
+    /// Time the analysis started; used for "in the future" checks so all
+    /// analyzers of one file agree on "now".
+    pub now: SystemTime,
     strings: OnceLock<Result<StringsFacts, AnalysisError>>,
+    pe: OnceLock<Result<pe::PeImage, AnalysisError>>,
 }
 
 impl<'a> AnalysisContext<'a> {
@@ -40,8 +46,31 @@ impl<'a> AnalysisContext<'a> {
             input,
             config,
             deadline,
+            now: SystemTime::now(),
             strings: OnceLock::new(),
+            pe: OnceLock::new(),
         }
+    }
+
+    /// Parsed PE headers and section table. Parsed on first call, then cached.
+    ///
+    /// # Errors
+    /// [`AnalysisError::Malformed`] if the input is not a PE file, otherwise
+    /// whatever [`pe::parse`] reports (truncation, limits, parser failure).
+    pub fn pe(&self) -> Result<&pe::PeImage, AnalysisError> {
+        self.pe
+            .get_or_init(|| {
+                if self.input.format == Format::Pe {
+                    pe::parse(&self.input.data, &self.config.limits)
+                } else {
+                    Err(AnalysisError::Malformed {
+                        what: "PE",
+                        reason: "input is not a PE file".into(),
+                    })
+                }
+            })
+            .as_ref()
+            .map_err(Clone::clone)
     }
 
     /// Extracted and classified strings (all of them, up to `max_strings`).
@@ -94,6 +123,7 @@ impl Default for Registry {
             .with(hashes::HashesAnalyzer)
             .with(entropy::EntropyAnalyzer)
             .with(strings::StringsAnalyzer)
+            .with(pe::headers::PeHeadersAnalyzer)
     }
 }
 
