@@ -421,3 +421,46 @@ fn defang_changes_text_but_not_json() {
     assert_eq!(url["value"], "http://c2.evil.top/gate");
     assert_eq!(url["value_defanged"], "hxxp://c2[.]evil[.]top/gate");
 }
+
+#[test]
+fn fail_on_sets_exit_code_three() {
+    // A full injection chain scores 40: medium.
+    let pe = injection_pe("inject-gate.exe");
+    let pe = pe.to_str().unwrap();
+    assert_eq!(rtriage(&["--fail-on", "medium", pe]).status.code(), Some(3));
+    assert_eq!(rtriage(&["--fail-on", "low", pe]).status.code(), Some(3));
+    assert_eq!(rtriage(&["--fail-on", "high", pe]).status.code(), Some(0));
+    assert_eq!(rtriage(&[pe]).status.code(), Some(0));
+    let clean = scratch("clean-gate.bin", b"plain text, nothing to see");
+    assert_eq!(
+        rtriage(&["--fail-on", "low", clean.to_str().unwrap()])
+            .status
+            .code(),
+        Some(0)
+    );
+}
+
+#[test]
+fn fail_on_beats_failures_and_warns() {
+    let pe = injection_pe("inject-gate2.exe");
+    let args = [pe.to_str().unwrap(), "no-such-file.bin"];
+    assert_eq!(rtriage(&args).status.code(), Some(1));
+    let out = rtriage(&["--fail-on", "medium", args[0], args[1]]);
+    assert_eq!(out.status.code(), Some(3));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("exit code 3 (--fail-on) takes precedence"),
+        "{err}"
+    );
+}
+
+#[test]
+fn fail_on_rejects_unknown_levels() {
+    for bad in ["clean_looking", "critical", ""] {
+        assert_eq!(
+            rtriage(&["--fail-on", bad, "x.bin"]).status.code(),
+            Some(2),
+            "{bad}"
+        );
+    }
+}

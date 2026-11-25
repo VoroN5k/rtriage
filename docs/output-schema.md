@@ -278,6 +278,14 @@ analyzer was interrupted or never started, and the report is partial.
 
 | Code | Meaning |
 |---|---|
-| `0` | All files analyzed. |
+| `0` | All files analyzed (and no `--fail-on` threshold met). |
 | `1` | At least one file failed (see `failures`), or the report could not be written. |
-| `2` | Usage error. |
+| `2` | Usage error (bad flags, invalid `--rules-dir` content). |
+| `3` | `--fail-on <low\|medium\|high>`: at least one report's `risk.level` is at or above the level. |
+
+**Priority: 3 > 1 > 0.** A met gate is the strongest signal for CI, so it
+wins over failed files; in that case rtriage warns on stderr that failures
+were masked (they are still listed in `failures`). It also warns when a
+report timed out and is partial, since its risk may be underestimated.
+Skipped paths never change the exit code. With no reports at all a gate
+cannot be met.

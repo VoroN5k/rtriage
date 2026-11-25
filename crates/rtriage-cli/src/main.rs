@@ -15,7 +15,7 @@ use anyhow::Context;
 use clap::Parser;
 use rtriage_core::rules_dir::{RulesDir, KNOWN_FILES};
 use rtriage_core::walk::{self, WalkOptions};
-use rtriage_core::{Config, Registry};
+use rtriage_core::{Config, Registry, RiskLevel};
 use tracing::level_filters::LevelFilter;
 
 use crate::cli::{Cli, OutputFormat};
@@ -27,6 +27,8 @@ use crate::sanitize::sanitize;
 const EXIT_RUNTIME_ERROR: u8 = 1;
 /// Invalid invocation or configuration (clap uses the same code).
 const EXIT_USAGE: u8 = 2;
+/// `--fail-on` threshold met by at least one file.
+const EXIT_RISK: u8 = 3;
 
 fn main() -> ExitCode {
     // clap exits with code 2 on usage errors.
@@ -108,11 +110,52 @@ fn run(cli: &Cli, config: &Config) -> anyhow::Result<ExitCode> {
 
     write_output(cli, &result)?;
 
-    Ok(if result.failures.is_empty() {
-        ExitCode::SUCCESS
+    let fail_on = cli.fail_on.map(RiskLevel::from);
+    let code = exit_code(&result, fail_on);
+    for w in exit_warnings(&result, code) {
+        eprintln!("warning: {w}");
+    }
+    Ok(ExitCode::from(code))
+}
+
+/// Exit code for a finished run: [`EXIT_RISK`] if `--fail-on` is met, else
+/// [`EXIT_RUNTIME_ERROR`] if any file failed, else 0 (priority 3 > 1 > 0).
+fn exit_code(run: &Run, fail_on: Option<RiskLevel>) -> u8 {
+    let risky = fail_on.is_some_and(|level| run.reports.iter().any(|r| r.risk.level >= level));
+    if risky {
+        EXIT_RISK
+    } else if !run.failures.is_empty() {
+        EXIT_RUNTIME_ERROR
     } else {
-        ExitCode::from(EXIT_RUNTIME_ERROR)
-    })
+        0
+    }
+}
+
+/// Things a gate (`--fail-on`, exit codes) can hide: failed files masked by
+/// code 3, and partial reports whose risk may be underestimated.
+fn exit_warnings(run: &Run, code: u8) -> Vec<String> {
+    let mut out = Vec::new();
+    if code == EXIT_RISK && !run.failures.is_empty() {
+        out.push(format!(
+            "{} file(s) could not be analyzed; exit code 3 (--fail-on) takes precedence over 1",
+            run.failures.len()
+        ));
+    }
+    let partial = run
+        .reports
+        .iter()
+        .filter(|r| {
+            r.errors
+                .iter()
+                .any(|e| matches!(e.error, rtriage_core::AnalysisError::Timeout { .. }))
+        })
+        .count();
+    if partial > 0 {
+        out.push(format!(
+            "{partial} report(s) timed out and are partial; their risk may be underestimated"
+        ));
+    }
+    out
 }
 
 fn build_config(cli: &Cli) -> anyhow::Result<Config> {
@@ -246,4 +289,72 @@ fn init_logging(cli: &Cli) {
         .without_time()
         .with_ansi(cli.color_allowed() && io::IsTerminal::is_terminal(&io::stderr()))
         .init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rtriage_core::{Deadline, Input};
+
+    fn report(level: RiskLevel) -> rtriage_core::Report {
+        let mut r =
+            Registry::default().analyze(&Input::from_bytes("t", b"x".to_vec()), &Config::default());
+        r.risk.level = level;
+        r
+    }
+
+    fn run(levels: &[RiskLevel], failures: usize) -> Run {
+        Run {
+            reports: levels.iter().map(|l| report(*l)).collect(),
+            failures: (0..failures)
+                .map(|i| Failure {
+                    path: format!("f{i}"),
+                    error: "gone".into(),
+                })
+                .collect(),
+            skipped: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn priority_is_risk_then_failure_then_success() {
+        use RiskLevel::*;
+        assert_eq!(exit_code(&run(&[Low], 0), None), 0);
+        assert_eq!(exit_code(&run(&[High], 1), None), EXIT_RUNTIME_ERROR);
+        assert_eq!(exit_code(&run(&[Medium], 0), Some(Medium)), EXIT_RISK);
+        assert_eq!(exit_code(&run(&[Medium], 0), Some(High)), 0);
+        assert_eq!(
+            exit_code(&run(&[CleanLooking, High], 0), Some(Low)),
+            EXIT_RISK
+        );
+        // 3 beats 1.
+        assert_eq!(exit_code(&run(&[High], 2), Some(Medium)), EXIT_RISK);
+        assert_eq!(exit_code(&run(&[Low], 2), Some(Medium)), EXIT_RUNTIME_ERROR);
+        // No reports at all: a gate cannot be met.
+        assert_eq!(exit_code(&run(&[], 0), Some(Low)), 0);
+    }
+
+    #[test]
+    fn masked_failures_and_partial_reports_are_warned_about() {
+        let masked = run(&[RiskLevel::High], 1);
+        let w = exit_warnings(&masked, EXIT_RISK);
+        assert!(
+            w.iter().any(|w| w.contains("could not be analyzed")),
+            "{w:?}"
+        );
+        assert!(exit_warnings(&masked, EXIT_RUNTIME_ERROR).is_empty());
+
+        let partial = Registry::default().analyze_with_deadline(
+            &Input::from_bytes("t", b"x".to_vec()),
+            &Config::default(),
+            Deadline::expired(),
+        );
+        let r = Run {
+            reports: vec![partial],
+            failures: Vec::new(),
+            skipped: Vec::new(),
+        };
+        let w = exit_warnings(&r, 0);
+        assert!(w.iter().any(|w| w.contains("partial")), "{w:?}");
+    }
 }

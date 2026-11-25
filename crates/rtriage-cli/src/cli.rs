@@ -44,6 +44,11 @@ pub struct Cli {
     #[arg(long)]
     pub defang: bool,
 
+    /// Exit with code 3 if any file's risk is at or above this level (for CI
+    /// gates). Takes precedence over exit code 1 for failed files.
+    #[arg(long, value_enum, value_name = "LEVEL")]
+    pub fail_on: Option<FailOn>,
+
     /// Only show findings at or above this severity (the score always uses all).
     #[arg(long, value_enum, value_name = "LEVEL", default_value_t = MinSeverity::Info)]
     pub min_severity: MinSeverity,
@@ -93,6 +98,27 @@ pub enum MinSeverity {
     Medium,
     /// High only.
     High,
+}
+
+/// Risk threshold for `--fail-on`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum FailOn {
+    /// Low, medium or high risk.
+    Low,
+    /// Medium or high risk.
+    Medium,
+    /// High risk only.
+    High,
+}
+
+impl From<FailOn> for rtriage_core::RiskLevel {
+    fn from(f: FailOn) -> Self {
+        match f {
+            FailOn::Low => Self::Low,
+            FailOn::Medium => Self::Medium,
+            FailOn::High => Self::High,
+        }
+    }
 }
 
 impl From<MinSeverity> for rtriage_core::Severity {
