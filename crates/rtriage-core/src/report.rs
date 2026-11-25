@@ -51,6 +51,36 @@ pub struct Hashes {
 pub struct Facts {
     /// Entropy profile; `None` until the entropy analyzer has run.
     pub entropy: Option<EntropyFacts>,
+    /// Extracted strings; `None` until the strings analyzer has run.
+    pub strings: Option<StringsFacts>,
+}
+
+/// Result of string extraction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StringsFacts {
+    /// Minimum length used, in characters.
+    pub min_len: u64,
+    /// Number of strings found, including any beyond `max_strings`.
+    pub total: u64,
+    /// `true` if `total` exceeded `max_strings` and `items` was capped.
+    pub limit_reached: bool,
+    /// Extracted strings sorted by offset (at most `max_strings`).
+    pub items: Vec<ExtractedString>,
+}
+
+/// One string found in the file. `value` is raw attacker data: sanitize before display.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExtractedString {
+    /// File offset of the first byte.
+    pub offset: u64,
+    /// Encoding it was found in.
+    pub encoding: StringEncoding,
+    /// Full length in characters (before truncation).
+    pub len: u64,
+    /// Decoded value, cut to `max_string_len` characters.
+    pub value: String,
+    /// `true` if `value` was cut short.
+    pub truncated: bool,
 }
 
 /// Shannon entropy summary of the whole file.

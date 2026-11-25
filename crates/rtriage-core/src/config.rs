@@ -10,12 +10,32 @@ use serde::Serialize;
 use crate::limits::Limits;
 
 /// Everything an analysis run can be tuned with.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Config {
     /// Resource limits on file-derived values.
     pub limits: Limits,
     /// Heuristic thresholds.
     pub thresholds: Thresholds,
+    /// Minimum string length (in characters) for extraction. Default: 5.
+    pub strings_min_len: NonZeroUsize,
+}
+
+impl Config {
+    /// Default for [`Config::strings_min_len`].
+    pub const DEFAULT_STRINGS_MIN_LEN: NonZeroUsize = match NonZeroUsize::new(5) {
+        Some(n) => n,
+        None => NonZeroUsize::MIN,
+    };
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            limits: Limits::default(),
+            thresholds: Thresholds::default(),
+            strings_min_len: Self::DEFAULT_STRINGS_MIN_LEN,
+        }
+    }
 }
 
 /// Heuristic thresholds. [`Thresholds::default`] gives the documented defaults.

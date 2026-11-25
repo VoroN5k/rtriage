@@ -29,8 +29,8 @@ impl Analyzer for EntropyAnalyzer {
 
     fn run(&self, ctx: &AnalysisContext<'_>, out: &mut ReportBuilder) -> Result<(), AnalysisError> {
         let data = &ctx.input.data;
-        let window = ctx.thresholds.entropy_window.get();
-        let threshold = ctx.thresholds.entropy_high;
+        let window = ctx.config.thresholds.entropy_window.get();
+        let threshold = ctx.config.thresholds.entropy_high;
         out.facts.entropy = Some(EntropyFacts {
             whole_file: shannon(data),
             window: to_u64(window),

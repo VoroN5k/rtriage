@@ -6,11 +6,11 @@
 
 pub mod entropy;
 pub mod hashes;
+pub mod strings;
 
-use crate::config::{Config, Thresholds};
+use crate::config::Config;
 use crate::error::AnalysisError;
 use crate::input::Input;
-use crate::limits::Limits;
 use crate::report::{Format, Report, ReportBuilder, Risk};
 
 /// Read-only data shared by all analyzers for one file.
@@ -18,10 +18,8 @@ use crate::report::{Format, Report, ReportBuilder, Risk};
 pub struct AnalysisContext<'a> {
     /// The loaded file.
     pub input: &'a Input,
-    /// Resource limits to enforce on file-derived values.
-    pub limits: &'a Limits,
-    /// Heuristic thresholds.
-    pub thresholds: &'a Thresholds,
+    /// Limits, thresholds and options for this run.
+    pub config: &'a Config,
 }
 
 /// One independent analysis pass.
@@ -59,6 +57,7 @@ impl Default for Registry {
         Self::empty()
             .with(hashes::HashesAnalyzer)
             .with(entropy::EntropyAnalyzer)
+            .with(strings::StringsAnalyzer)
     }
 }
 
@@ -84,11 +83,7 @@ impl Registry {
 
     /// Runs every applicable analyzer on `input` and assembles the report.
     pub fn analyze(&self, input: &Input, config: &Config) -> Report {
-        let ctx = AnalysisContext {
-            input,
-            limits: &config.limits,
-            thresholds: &config.thresholds,
-        };
+        let ctx = AnalysisContext { input, config };
         let mut out = ReportBuilder::new(input.file_info());
         for analyzer in self.analyzers.iter().filter(|a| a.applies_to(input.format)) {
             if let Err(err) = analyzer.run(&ctx, &mut out) {
