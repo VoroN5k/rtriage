@@ -76,7 +76,7 @@ Because the highest-severity, highest-confidence findings are taken first,
 caps cut the weakest contributions. `--explain` prints every finding with its
 table points, its contribution, and which cap (if any) reduced it.
 
-### Explained-by: packer symptoms
+### Explained-by: packer and runtime symptoms
 
 A packer makes a file *look* anomalous in predictable ways (RWX sections,
 virtual-only sections, high-entropy code, a stub entry point, a tiny import
@@ -86,7 +86,7 @@ necessarily causes are explained by it.
 
 - **Data.** [`rules/packers.toml`](../rules/packers.toml) lists per packer
   the indicators required to confirm it (`confirm_with`) and the finding IDs
-  it explains (`explains`). Only UPX is listed for now.
+  it explains (`explains`), per format (`format = "pe"` default, or`n  `elf`). UPX is listed for both formats.
 - **Confirmation needs independent indicators, all of them.** For UPX:
   - `section_names`: `UPX0`/`UPX1`/... present;
   - `header_signature`: `UPX!` in the first 4 KiB of the headers;
@@ -94,6 +94,13 @@ necessarily causes are explained by it.
     of virtual size, immediately followed by an executable section with raw
     data, starting at or after the first one's end, containing the entry
     point. This check ignores section names.
+
+  For UPX on ELF (all three required):
+  - `header_signature`: `UPX!` within 4 KiB of either end of the file;
+  - `info_banner`: `$Info: This file is packed with the UPX` within 64 KiB of
+    either end;
+  - `stub_structure`: no section headers, 1–3 `PT_LOAD` segments, entry
+    point in an executable one.
 
   Spoofed names alone, or names + signature without the stub layout, confirm
   nothing; `PE-PACKER-KNOWN` still fires, but nothing is suppressed. The rule
@@ -103,12 +110,22 @@ necessarily causes are explained by it.
   `PE-SECTION-RWX`, `PE-SECTION-VIRTUAL-ONLY`, `PE-SECTION-HIGH-ENTROPY`,
   `PE-SECTION-NAME-UNUSUAL`, `PE-ENTRYPOINT-UNUSUAL`,
   `PE-IMPORTS-DYNAMIC-RESOLUTION`, `PE-IMPORTS-FEW`, `PE-PACKED-LIKELY`,
-  **API behavior groups (`PE-API-*`) are never suppressed**: the loader
+  `PE-RESOURCE-HIGH-ENTROPY`; ELF: `ELF-SECTIONS-MISSING`, `ELF-SEGMENT-RWX`,
+  `ELF-SEGMENT-HIGH-ENTROPY`, `ELF-PACKED-LIKELY`.
+  **API behavior groups (`PE-API-*`, `ELF-API-*`) are never suppressed**: the loader
   rejects them, and the scorer skips them even if a rule slipped through.
 - **Effect.** A suppressed finding stays in `findings` with
-  `suppressed: { by: "PE-PACKER-KNOWN", packer: "UPX" }`, scores 0, and
+  `suppressed: { kind: "packer", name: "UPX", by: "PE-PACKER-KNOWN" }`, scores 0, and
   consumes no category or low-severity cap. `--explain` shows each one.
-- **Analysis limited.** Whenever `PE-PACKER-KNOWN` or `PE-PACKED-LIKELY` is
+- **Runtimes** (`[[runtime]]` in the same file). A recognised Go or Rust
+  runtime (`facts.runtime`, at least `confirm_min` >= 2 independent
+  indicators, see `runtime` analyzer below) may explain **only** small
+  findings its toolchain produces by design: `ELF-HARDENING-NO-PIE`,
+  `ELF-HARDENING-NO-RELRO`, `PE-IMPORTS-FEW` (enforced by the loader; packing,
+  anomaly and API findings are rejected). Marked`n  `suppressed: { kind: "runtime", name: "go", by: null }`. Packers take
+  precedence when both apply.
+- **Analysis limited.** Whenever `PE-PACKER-KNOWN`, `PE-PACKED-LIKELY`,
+  `ELF-PACKER-KNOWN` or `ELF-PACKED-LIKELY` is
   present (confirmed or not), the report carries
   `analysis_limited: ["packed"]` and the text output shows
   `[PACKED: analysis limited]`: imports, strings and code findings describe
@@ -131,8 +148,11 @@ necessarily causes are explained by it.
 | Confirmed UPX + encrypted `RT_RCDATA` | 15 (resource finding explained) | low, `packed` |
 | Reflective-loader DLL + injection chain | 40 + 40, injection cap 40 | medium or above |
 | Any file, signed vs. unsigned | identical score | unchanged |
+| Confirmed UPX ELF (non-PIE stub), nothing else | 15 + 2 (`ELF-HARDENING-NO-PIE`, not explained) = 17; sections-missing, RWX, entropy, packed-likely explained | low, `packed` |
+| Spoofed `UPX!` on a section-less RWX ELF (no banner) | nothing suppressed | full score |
+| Go static ELF (runtime recognised) | no-PIE / no-RELRO explained | clean_looking |
 
-These scenarios are end-to-end tests in `scoring.rs` (`end_to_end`).
+These scenarios are end-to-end tests in `scoring.rs` (`end_to_end`,`n`elf_end_to_end`).
 
 **Packing cap = 30.** Packing on its own can reach the bottom of `medium`
 but never `high`: packers are common in legitimate software (installers,
@@ -716,6 +736,54 @@ and rootkit scanners carrying `/etc/ld.so.preload` plus their markers.
 **Trade-off of `unless`.** A veto string can be planted by malware to evade
 a group; it is used only where scanners and tools would otherwise trigger
 reliably (the rootkit group), and the veto list is visible in the rules file.
+
+### ELF packers (`elf-packers` analyzer)
+
+#### `ELF-PACKER-KNOWN`
+
+| | |
+|---|---|
+| Severity / confidence | Medium / High (15 points, `packing`) |
+| Trigger | `UPX!` within 4 KiB of either end of the file, or UPX's `$Info` banner within 64 KiB of either end. The layout alone never names a packer. |
+| Evidence | `field packer`, `field indicators`, `range` of the magic, banner offset, stub-structure description |
+| ATT&CK | — |
+
+**Rationale.** UPX is the most common ELF packer (IoT botnets, but also
+legitimate size-optimised tools). The finding sets expectations: imports and
+strings describe the stub. **False positives:** a file that merely contains
+the bytes `UPX!` near an end (one indicator, so nothing is suppressed).
+
+#### `ELF-PACKED-LIKELY`
+
+| | |
+|---|---|
+| Severity / confidence | Medium / Low (6 points, `packing`) |
+| Trigger | An executable `PT_LOAD` with at least `section_entropy_min_size` bytes on disk and entropy >= `entropy_high`, **and** at most `imports_few_max` (10) imported symbols (symbol table not limit-truncated). Evaluated even when a packer is known, so a confirmed packer can explain it. |
+| Evidence | segment index/offset/size, `entropy`, imported symbol count |
+
+**False positives:** static binaries with embedded compressed payloads in
+the code segment; low confidence for that reason. Negative tests: glibc,
+Go, Rust and BusyBox profiles; high entropy with 30 imports.
+
+### ELF notes (`elf-notes` analyzer)
+
+Facts only (`facts.elf.notes`): GNU build-id, GNU ABI tag, Go build ID from
+`PT_NOTE` segments. Bounded by `max_notes` (256), one budget step per note;
+a note whose sizes run past its segment stops parsing of that segment.
+
+### Language runtime (`runtime` analyzer, PE and ELF)
+
+Facts only (`facts.runtime`), recorded when **at least two independent
+indicators** agree; one alone (a `go1.22` string, a Rust panic message in a
+C program) records nothing.
+
+| Runtime | Indicators |
+|---|---|
+| Go | `go_buildinfo` (`\xff Go buildinf:` magic anywhere), `go_build_id` (`Go build ID: "` string or `.note.go.buildid`), `go_sections` (`.gopclntab`, `.go.buildinfo`, `.noptrdata`), `go_runtime_strings` (`runtime.main`, `runtime.goexit`, ...) |
+| Rust | `rustc_path` (`/rustc/<40-hex commit>/`), `panic_messages` (`called `Option::unwrap()` on a `None` value`, ...), `mangled_symbols` (legacy `_ZN...17h<hash>E`, v0 `_R...`, `rust_begin_unwind`, ...) |
+
+It never produces a finding, never touches API groups, and only explains the
+small findings listed under "Runtimes" above.
 
 ### Facts that suppress heuristics
 

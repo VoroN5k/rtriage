@@ -1,25 +1,33 @@
-# rtriage packer explanations ("explained-by").
+# rtriage packer and runtime explanations ("explained-by").
 #
-# When a packer is CONFIRMED, the structural findings it necessarily causes
+# When a packer or runtime is CONFIRMED, the findings it necessarily causes
 # are marked as explained by it: they stay in the report, but contribute no
 # points and consume no category cap. `--explain` lists every suppression.
+# API behavior groups (PE-API-*, ELF-API-*) can never be explained.
 #
-#   confirm_with  Indicators that must ALL be present (at least two, so a
-#                 single spoofed section name never suppresses anything):
-#                   section_names     the packer's default section names
-#                   header_signature  its signature in the PE headers
-#                   stub_structure    its name-independent section layout
-#                 Only indicators rtriage can check for that packer are allowed.
-#   explains      Finding IDs the packer explains. Only structural PE findings
-#                 are allowed; PE-API-* behavior groups are never suppressed.
+# [[packer]]
+#   format        "pe" (default) or "elf"
+#   confirm_with  indicators that must ALL be present (at least two, so a
+#                 single spoofed artefact never suppresses anything); only
+#                 indicators rtriage can check for that packer are allowed:
+#                   PE : section_names, header_signature, stub_structure
+#                   ELF: header_signature, info_banner, stub_structure
+#   explains      structural finding IDs the packer explains
 #
-# Detection itself (names, signatures) lives in the pe-packers analyzer; this
-# file only says what a confirmed packer explains. See docs/heuristics.md.
+# [[runtime]]
+#   confirm_min   independent runtime indicators required (at least two)
+#   explains      only small hardening/import findings its toolchain produces
+#                 by design (ELF-HARDENING-NO-PIE, ELF-HARDENING-NO-RELRO,
+#                 PE-IMPORTS-FEW)
+#
+# Detection lives in the analyzers; this file only says what a confirmed
+# packer or runtime explains. See docs/heuristics.md.
 
 schema_version = 1
 
 [[packer]]
 name = "UPX"
+format = "pe"
 confirm_with = ["section_names", "header_signature", "stub_structure"]
 explains = [
     "PE-SECTION-RWX",            # UPX0/UPX1 are RWX by design
@@ -30,4 +38,33 @@ explains = [
     "PE-IMPORTS-DYNAMIC-RESOLUTION", # stub rebuilds the import table itself
     "PE-IMPORTS-FEW",            # minimal stub import set
     "PE-RESOURCE-HIGH-ENTROPY",  # UPX compresses resources too
+]
+
+[[packer]]
+name = "UPX"
+format = "elf"
+confirm_with = ["header_signature", "info_banner", "stub_structure"]
+explains = [
+    "ELF-SECTIONS-MISSING",      # UPX output has no section header table
+    "ELF-SEGMENT-RWX",           # the stub unpacks in place
+    "ELF-SEGMENT-HIGH-ENTROPY",  # compressed program
+    "ELF-PACKED-LIKELY",         # same shape, now with a name
+]
+
+[[runtime]]
+name = "go"
+confirm_min = 2
+explains = [
+    "ELF-HARDENING-NO-PIE",      # Go links non-PIE static executables by default
+    "ELF-HARDENING-NO-RELRO",
+    "PE-IMPORTS-FEW",
+]
+
+[[runtime]]
+name = "rust"
+confirm_min = 2
+explains = [
+    "ELF-HARDENING-NO-PIE",      # e.g. non-PIE static musl builds
+    "ELF-HARDENING-NO-RELRO",
+    "PE-IMPORTS-FEW",
 ]

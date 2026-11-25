@@ -15,6 +15,8 @@ pub mod api_groups;
 pub mod checksec;
 pub mod dynamic;
 pub mod headers;
+pub mod notes;
+pub mod packers;
 pub mod segments;
 
 use crate::analyzers::pe::guarded;

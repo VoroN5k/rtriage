@@ -669,12 +669,12 @@ slots = [["Foo", "Bar*"]]
 
 // ======================================================= packer explanations
 
-/// The packer explanations shipped with rtriage.
+/// The packer and runtime explanations shipped with rtriage.
 pub const BUNDLED_PACKER_RULES: &str = include_str!("../../../rules/packers.toml");
 
-/// Finding IDs a packer may explain: structural PE findings only. API
-/// behavior groups (`PE-API-*`) are deliberately absent and can never be
-/// suppressed.
+/// Finding IDs a **packer** may explain: structural findings only. API
+/// behavior groups (`PE-API-*`, `ELF-API-*`) are deliberately absent and can
+/// never be suppressed.
 pub const EXPLAINABLE_IDS: &[&str] = &[
     "PE-SECTION-RWX",
     "PE-SECTION-VIRTUAL-ONLY",
@@ -685,9 +685,21 @@ pub const EXPLAINABLE_IDS: &[&str] = &[
     "PE-IMPORTS-FEW",
     "PE-PACKED-LIKELY",
     "PE-RESOURCE-HIGH-ENTROPY",
+    "ELF-SECTIONS-MISSING",
+    "ELF-SEGMENT-RWX",
+    "ELF-SEGMENT-HIGH-ENTROPY",
+    "ELF-PACKED-LIKELY",
 ];
 
-/// Minimum independent indicators required to confirm a packer.
+/// Finding IDs a **runtime** may explain: only small hardening/import
+/// findings that its toolchain produces by design.
+pub const RUNTIME_EXPLAINABLE_IDS: &[&str] = &[
+    "ELF-HARDENING-NO-PIE",
+    "ELF-HARDENING-NO-RELRO",
+    "PE-IMPORTS-FEW",
+];
+
+/// Minimum independent indicators required to confirm a packer or runtime.
 pub const MIN_CONFIRM_INDICATORS: usize = 2;
 
 #[derive(Debug, Deserialize)]
@@ -696,31 +708,81 @@ struct RawPackerFile {
     schema_version: u32,
     #[serde(default, rename = "packer")]
     packers: Vec<RawPacker>,
+    #[serde(default, rename = "runtime")]
+    runtimes: Vec<RawRuntime>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawPacker {
     name: String,
+    #[serde(default = "default_format")]
+    format: String,
     confirm_with: Vec<String>,
     explains: Vec<String>,
 }
 
-/// Validated packer explanations.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRuntime {
+    name: String,
+    confirm_min: usize,
+    explains: Vec<String>,
+}
+
+fn default_format() -> String {
+    "pe".into()
+}
+
+/// Binary format a packer rule applies to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackerFormat {
+    /// Checked against `facts.pe.packers`; explained by `PE-PACKER-KNOWN`.
+    Pe,
+    /// Checked against `facts.elf.packers`; explained by `ELF-PACKER-KNOWN`.
+    Elf,
+}
+
+impl PackerFormat {
+    /// The finding that names a packer of this format.
+    pub fn finding_id(self) -> &'static str {
+        match self {
+            PackerFormat::Pe => "PE-PACKER-KNOWN",
+            PackerFormat::Elf => "ELF-PACKER-KNOWN",
+        }
+    }
+}
+
+/// Validated packer and runtime explanations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackerRuleSet {
-    /// One entry per packer.
+    /// One entry per (packer, format).
     pub packers: Vec<PackerRule>,
+    /// One entry per runtime.
+    pub runtimes: Vec<RuntimeRule>,
 }
 
 /// What a confirmed packer explains.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackerRule {
-    /// Packer name as detected by the `pe-packers` analyzer.
+    /// Packer name as detected by the format's packers analyzer.
     pub name: &'static str,
+    /// Format.
+    pub format: PackerFormat,
     /// Indicators that must all be present.
     pub confirm_with: Vec<&'static str>,
     /// Finding IDs explained once confirmed (all from [`EXPLAINABLE_IDS`]).
+    pub explains: Vec<&'static str>,
+}
+
+/// What a confirmed runtime explains.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeRule {
+    /// Runtime name as reported in `facts.runtime.language` (`go`, `rust`).
+    pub name: &'static str,
+    /// Independent indicators required (at least [`MIN_CONFIRM_INDICATORS`]).
+    pub confirm_min: usize,
+    /// Finding IDs explained (all from [`RUNTIME_EXPLAINABLE_IDS`]).
     pub explains: Vec<&'static str>,
 }
 
@@ -732,6 +794,14 @@ impl PackerRule {
 }
 
 impl PackerRuleSet {
+    /// An empty rule set (explains nothing).
+    pub fn empty() -> Self {
+        Self {
+            packers: Vec::new(),
+            runtimes: Vec::new(),
+        }
+    }
+
     /// The bundled explanations (parsed once).
     ///
     /// # Errors
@@ -742,7 +812,7 @@ impl PackerRuleSet {
         BUNDLED.as_ref()
     }
 
-    /// Parses and validates a packer explanations file.
+    /// Parses and validates a packer/runtime explanations file.
     ///
     /// # Errors
     /// See [`RulesError`].
@@ -761,20 +831,32 @@ impl PackerRuleSet {
                 found: raw.schema_version,
             });
         }
-        if raw.packers.len() > MAX_GROUPS {
+        if raw.packers.len() + raw.runtimes.len() > MAX_GROUPS {
             return Err(RulesError::TooManyGroups {
-                count: raw.packers.len(),
+                count: raw.packers.len() + raw.runtimes.len(),
             });
         }
-        let known: Vec<(&'static str, Vec<&'static str>)> =
-            crate::analyzers::pe::packers::known_packers().collect();
         let mut seen = BTreeSet::new();
         let mut packers = Vec::with_capacity(raw.packers.len());
         for p in raw.packers {
-            let Some((name, available)) = known.iter().find(|(n, _)| *n == p.name) else {
-                return Err(invalid(&p.name, "unknown packer name"));
+            let format = match p.format.as_str() {
+                "pe" => PackerFormat::Pe,
+                "elf" => PackerFormat::Elf,
+                other => {
+                    return Err(invalid(
+                        &p.name,
+                        &format!("unknown format {other:?} (pe or elf)"),
+                    ))
+                }
             };
-            if !seen.insert(*name) {
+            let known: Vec<(&'static str, Vec<&'static str>)> = match format {
+                PackerFormat::Pe => crate::analyzers::pe::packers::known_packers().collect(),
+                PackerFormat::Elf => crate::analyzers::elf::packers::known_packers().collect(),
+            };
+            let Some((name, available)) = known.iter().find(|(n, _)| *n == p.name) else {
+                return Err(invalid(&p.name, "unknown packer name for this format"));
+            };
+            if !seen.insert((*name, p.format.clone())) {
                 return Err(invalid(&p.name, "duplicate packer"));
             }
             let mut confirm_with = Vec::new();
@@ -795,28 +877,61 @@ impl PackerRuleSet {
                     "confirm_with needs at least two different indicators",
                 ));
             }
-            let mut explains = Vec::new();
-            for id in &p.explains {
-                let Some(known_id) = EXPLAINABLE_IDS.iter().find(|k| **k == id.as_str()) else {
-                    return Err(invalid(
-                        &p.name,
-                        &format!("{id:?} cannot be explained by a packer (API groups never can)"),
-                    ));
-                };
-                if !explains.contains(known_id) {
-                    explains.push(*known_id);
-                }
-            }
+            let explains = explained_ids(&p.name, &p.explains, EXPLAINABLE_IDS, "a packer")?;
             packers.push(PackerRule {
                 name,
+                format,
                 confirm_with,
                 explains,
             });
         }
-        Ok(Self { packers })
+        let mut runtimes = Vec::with_capacity(raw.runtimes.len());
+        for r in raw.runtimes {
+            let Some(name) = crate::analyzers::runtime::KNOWN_RUNTIMES
+                .iter()
+                .find(|n| **n == r.name.as_str())
+            else {
+                return Err(invalid(&r.name, "unknown runtime (go or rust)"));
+            };
+            if runtimes.iter().any(|x: &RuntimeRule| x.name == *name) {
+                return Err(invalid(&r.name, "duplicate runtime"));
+            }
+            if r.confirm_min < MIN_CONFIRM_INDICATORS {
+                return Err(invalid(&r.name, "confirm_min must be at least 2"));
+            }
+            let explains =
+                explained_ids(&r.name, &r.explains, RUNTIME_EXPLAINABLE_IDS, "a runtime")?;
+            runtimes.push(RuntimeRule {
+                name,
+                confirm_min: r.confirm_min,
+                explains,
+            });
+        }
+        Ok(Self { packers, runtimes })
     }
 }
 
+/// Validates `ids` against `allowed`, deduplicating.
+fn explained_ids(
+    owner: &str,
+    ids: &[String],
+    allowed: &[&'static str],
+    what: &str,
+) -> Result<Vec<&'static str>, RulesError> {
+    let mut out = Vec::new();
+    for id in ids {
+        let Some(known) = allowed.iter().find(|k| **k == id.as_str()) else {
+            return Err(invalid(
+                owner,
+                &format!("{id:?} cannot be explained by {what} (API groups never can)"),
+            ));
+        };
+        if !out.contains(known) {
+            out.push(*known);
+        }
+    }
+    Ok(out)
+}
 #[cfg(test)]
 mod packer_tests {
     use super::*;
@@ -828,9 +943,20 @@ mod packer_tests {
     #[test]
     fn bundled_packer_rules_are_valid() {
         let r = PackerRuleSet::bundled().unwrap();
-        assert_eq!(r.packers.len(), 1);
+        assert_eq!(r.packers.len(), 2);
+        assert_eq!(
+            r.runtimes.iter().map(|r| r.name).collect::<Vec<_>>(),
+            ["go", "rust"]
+        );
         let upx = &r.packers[0];
-        assert_eq!(upx.name, "UPX");
+        assert_eq!((upx.name, upx.format), ("UPX", PackerFormat::Pe));
+        let elf = &r.packers[1];
+        assert_eq!((elf.name, elf.format), ("UPX", PackerFormat::Elf));
+        assert_eq!(
+            elf.confirm_with,
+            ["header_signature", "info_banner", "stub_structure"]
+        );
+        assert!(elf.explains.contains(&"ELF-PACKED-LIKELY"));
         assert_eq!(
             upx.confirm_with,
             ["section_names", "header_signature", "stub_structure"]
@@ -839,6 +965,55 @@ mod packer_tests {
         assert!(upx.explains.iter().all(|id| !id.starts_with("PE-API-")));
     }
 
+    #[test]
+    fn elf_packer_uses_elf_indicators() {
+        let ok = file(
+            "name = \"UPX\"\nformat = \"elf\"\nconfirm_with = [\"header_signature\", \"info_banner\"]\n\
+             explains = [\"ELF-SEGMENT-RWX\"]",
+        );
+        assert!(PackerRuleSet::parse(&ok).is_ok());
+        // section_names is a PE indicator.
+        let bad = ok.replace("\"info_banner\"", "\"section_names\"");
+        assert!(PackerRuleSet::parse(&bad).is_err());
+        let fmt = ok.replace("\"elf\"", "\"macho\"");
+        assert!(PackerRuleSet::parse(&fmt).is_err());
+    }
+
+    #[test]
+    fn elf_api_groups_can_never_be_explained() {
+        let f = file(
+            "name = \"UPX\"\nformat = \"elf\"\nconfirm_with = [\"header_signature\", \"info_banner\"]\n\
+             explains = [\"ELF-API-SHELL\"]",
+        );
+        assert!(PackerRuleSet::parse(&f).is_err());
+    }
+
+    fn runtime(body: &str) -> String {
+        format!("schema_version = 1\n[[runtime]]\n{body}\n")
+    }
+
+    #[test]
+    fn runtimes_explain_only_small_findings() {
+        let ok = runtime("name = \"go\"\nconfirm_min = 2\nexplains = [\"ELF-HARDENING-NO-PIE\"]");
+        assert!(PackerRuleSet::parse(&ok).is_ok());
+        for id in [
+            "ELF-PACKED-LIKELY",
+            "PE-SECTION-RWX",
+            "ELF-API-NETWORK",
+            "ELF-HARDENING-EXEC-STACK",
+        ] {
+            let bad = ok.replace("ELF-HARDENING-NO-PIE", id);
+            assert!(PackerRuleSet::parse(&bad).is_err(), "{id}");
+        }
+    }
+
+    #[test]
+    fn runtime_needs_two_indicators_and_a_known_name() {
+        let one = runtime("name = \"go\"\nconfirm_min = 1\nexplains = []");
+        assert!(PackerRuleSet::parse(&one).is_err());
+        let unknown = runtime("name = \"zig\"\nconfirm_min = 2\nexplains = []");
+        assert!(PackerRuleSet::parse(&unknown).is_err());
+    }
     #[test]
     fn api_groups_can_never_be_explained() {
         let f = file(

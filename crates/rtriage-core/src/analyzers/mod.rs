@@ -13,6 +13,7 @@ pub mod entropy;
 pub mod hashes;
 pub mod pe;
 pub mod rule_engine;
+pub mod runtime;
 pub mod strings;
 
 use std::sync::OnceLock;
@@ -204,6 +205,9 @@ impl Default for Registry {
             .with(elf::segments::ElfSegmentsAnalyzer)
             .with(elf::checksec::ElfChecksecAnalyzer)
             .with(elf::api_groups::ElfApiGroupsAnalyzer)
+            .with(elf::packers::ElfPackersAnalyzer)
+            .with(elf::notes::ElfNotesAnalyzer)
+            .with(runtime::RuntimeAnalyzer)
     }
 }
 
@@ -267,12 +271,7 @@ impl Registry {
                         reason: "bundled packer rules are invalid".into(),
                     },
                 });
-                crate::scoring::score(
-                    &mut report,
-                    &PackerRuleSet {
-                        packers: Vec::new(),
-                    },
-                );
+                crate::scoring::score(&mut report, &PackerRuleSet::empty());
             }
         }
         report

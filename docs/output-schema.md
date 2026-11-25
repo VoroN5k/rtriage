@@ -35,7 +35,7 @@ Current version: **1**.
 | `findings` | array of [Finding](#finding) | Judgments, sorted by severity desc, confidence desc, id. |
 | `risk.score` | integer | Aggregate score for sorting (see `heuristics.md`, "Scoring v1"). |
 | `risk.level` | enum | `clean_looking` \| `low` \| `medium` \| `high`. |
-| `risk.breakdown` | array | One entry per finding in scoring order: `{ id, category, table_points, points, reduced_by? }`. `reduced_by` is `{ kind: "suppressed", by, packer }`, `{ kind: "duplicate" }`, `{ kind: "category_cap", cap }` or `{ kind: "low_severity_cap", cap }`. Not affected by `--min-severity`. |
+| `risk.breakdown` | array | One entry per finding in scoring order: `{ id, category, table_points, points, reduced_by? }`. `reduced_by` is `{ kind: "suppressed", explainer, name, by }` (`explainer` is `packer` or `runtime`; `by` is `null` for runtimes), `{ kind: "duplicate" }`, `{ kind: "category_cap", cap }` or `{ kind: "low_severity_cap", cap }`. Not affected by `--min-severity`. |
 | `analysis_limited` | array of enum | Why static analysis is less complete: `packed`. Empty normally. |
 | `errors` | array of [AnalyzerFailure](#analyzerfailure) | Analyzers that failed; the rest of the report is still valid. |
 
@@ -70,6 +70,8 @@ Every member is `null` if its analyzer did not run.
 | `limit_reached` | bool | `true` if more than `max_strings` strings were found. |
 | `items_included` | enum | `classified` (default: only strings with `kinds`) \| `all` (`--all-strings`). |
 | `items` | array | See below, sorted by offset. |
+
+**`runtime`** (any format; `null` unless at least two independent`nindicators agree): `{ language, version, indicators }`. `language` is`n`go` or `rust`; `version` is e.g. `go1.22.5` or `rustc <commit>`, or`n`null`. Indicators: Go `go_buildinfo`, `go_build_id`, `go_sections`,`n`go_runtime_strings`; Rust `rustc_path`, `panic_messages`,`n`mangled_symbols`.
 
 **`pe`** (non-PE input: `null`). Each part is `null` if its analyzer failed.
 
@@ -186,6 +188,10 @@ textrel }`. `imports` are undefined named dynamic symbols in table order;
 `symbol_count_source` is `section`, `dt_hash`, `dt_gnu_hash`, `strtab_gap`
 or `none`.
 
+`elf.packers`: same shape as `pe.packers`; ELF indicators are`nheader_signature`, `info_banner`, `stub_structure`.
+
+`elf.notes` (`null` if the file has no notes): `{ build_id, go_build_id,`nabi_tag, count, limit_reached }`; `build_id` is lowercase hex, `abi_tag`nlike `linux 3.2.0`; at most `max_notes` (256) notes are read.
+
 `elf.checksec`: `{ pie, nx, nx_source, relro, bind_now, canary, fortify,
 stripped }`; `pie`, `canary`, `fortify` are `null` when not applicable or
 unknown; `nx_source` is `gnu_stack` or `architecture_default`; `relro` is
@@ -216,7 +222,7 @@ before displaying**), `truncated` (bool), `kinds` (array, omitted when empty).
 | `detail` | string | Explanation. |
 | `evidence` | array | Tagged by `type`: `range {offset,len}`, `section {index,name}`, `import {library,symbol}`, `string {offset,encoding,value}`, `metric {name,value}`, `field {name,value}`. |
 | `attack` | array of string | MITRE ATT&CK technique IDs. |
-| `suppressed` | object (optional) | Present when a confirmed packer explains the finding: `{ by, packer }`, e.g. `{ "by": "PE-PACKER-KNOWN", "packer": "UPX" }`. Such findings score 0. |
+| `suppressed` | object (optional) | Present when a confirmed packer or runtime explains the finding: `{ kind, name, by }`, `kind` is `packer` or `runtime`, `by` is the finding naming the packer (`PE-PACKER-KNOWN` / `ELF-PACKER-KNOWN`) or `null` for runtimes. E.g. `{ "kind": "packer", "name": "UPX", "by": "PE-PACKER-KNOWN" }`. Such findings score 0. |
 
 `--min-severity` removes findings below the level from `findings` only;
 `risk` always reflects all findings.

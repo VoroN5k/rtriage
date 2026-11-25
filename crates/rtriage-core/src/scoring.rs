@@ -10,15 +10,20 @@
 use std::collections::BTreeSet;
 
 use crate::report::{
-    AnalysisLimit, Category, Confidence, Finding, Reduction, Report, Risk, RiskLevel, ScoreEntry,
-    Severity, Suppression,
+    AnalysisLimit, Category, Confidence, ExplainerKind, Finding, Reduction, Report, Risk,
+    RiskLevel, ScoreEntry, Severity, Suppression,
 };
-use crate::rules::PackerRuleSet;
+use crate::rules::{PackerFormat, PackerRuleSet};
 
 /// ID of the finding that names a packer; explanations are attributed to it.
 pub const PACKER_FINDING: &str = "PE-PACKER-KNOWN";
 /// Findings that make [`AnalysisLimit::Packed`] apply.
-const PACKED_FINDINGS: &[&str] = &["PE-PACKER-KNOWN", "PE-PACKED-LIKELY"];
+const PACKED_FINDINGS: &[&str] = &[
+    "PE-PACKER-KNOWN",
+    "PE-PACKED-LIKELY",
+    "ELF-PACKER-KNOWN",
+    "ELF-PACKED-LIKELY",
+];
 /// Global cap on points from low-severity findings.
 pub const LOW_SEVERITY_CAP: u32 = 15;
 
@@ -81,36 +86,66 @@ pub fn score(report: &mut Report, packer_rules: &PackerRuleSet) {
     report.risk = compute(&report.findings);
 }
 
-/// Marks findings explained by a **confirmed** packer. A packer is confirmed
-/// only when every indicator its rule requires was found; API groups can
-/// never be explained (enforced when rules are loaded).
+/// Marks findings explained by a **confirmed** packer or runtime.
+///
+/// A packer is confirmed only when every indicator its rule requires was
+/// found (per format: `facts.pe.packers` / `facts.elf.packers`); a runtime
+/// when `facts.runtime` lists at least its `confirm_min` indicators. Packers
+/// take precedence. API groups can never be explained (enforced when rules
+/// are loaded, and again here).
 pub fn explain(report: &mut Report, rules: &PackerRuleSet) {
-    let Some(detected) = report.facts.pe.as_ref().and_then(|pe| pe.packers.as_ref()) else {
-        return;
-    };
-    let confirmed: Vec<(&'static str, &[&'static str])> = rules
-        .packers
-        .iter()
-        .filter(|rule| {
-            detected
-                .iter()
+    let pe = report
+        .facts
+        .pe
+        .as_ref()
+        .and_then(|pe| pe.packers.as_deref());
+    let elf = report.facts.elf.as_ref().and_then(|e| e.packers.as_deref());
+    let mut explainers: Vec<(Suppression, &[&'static str])> = Vec::new();
+    for rule in &rules.packers {
+        let detected = match rule.format {
+            PackerFormat::Pe => pe,
+            PackerFormat::Elf => elf,
+        };
+        let confirmed = detected.is_some_and(|d| {
+            d.iter()
                 .any(|d| d.name == rule.name && rule.is_confirmed_by(&d.indicators))
-        })
-        .map(|rule| (rule.name, rule.explains.as_slice()))
-        .collect();
+        });
+        if confirmed {
+            explainers.push((
+                Suppression {
+                    kind: ExplainerKind::Packer,
+                    name: rule.name,
+                    by: Some(rule.format.finding_id()),
+                },
+                rule.explains.as_slice(),
+            ));
+        }
+    }
+    if let Some(rt) = &report.facts.runtime {
+        if let Some(rule) = rules
+            .runtimes
+            .iter()
+            .find(|r| r.name == rt.language && rt.indicators.len() >= r.confirm_min)
+        {
+            explainers.push((
+                Suppression {
+                    kind: ExplainerKind::Runtime,
+                    name: rule.name,
+                    by: None,
+                },
+                rule.explains.as_slice(),
+            ));
+        }
+    }
     for f in &mut report.findings {
-        if f.suppressed.is_some() || f.id.starts_with("PE-API-") {
+        if f.suppressed.is_some() || f.id.starts_with("PE-API-") || f.id.starts_with("ELF-API-") {
             continue;
         }
-        if let Some((packer, _)) = confirmed.iter().find(|(_, ids)| ids.contains(&f.id)) {
-            f.suppressed = Some(Suppression {
-                by: PACKER_FINDING,
-                packer,
-            });
+        if let Some((s, _)) = explainers.iter().find(|(_, ids)| ids.contains(&f.id)) {
+            f.suppressed = Some(s.clone());
         }
     }
 }
-
 /// Computes the score of `findings` (see module docs for the algorithm).
 pub fn compute(findings: &[Finding]) -> Risk {
     let mut order: Vec<&Finding> = findings.iter().collect();
@@ -139,8 +174,9 @@ pub fn compute(findings: &[Finding]) -> Risk {
         };
         if let Some(s) = &f.suppressed {
             entry.reduced_by = (table > 0).then_some(Reduction::Suppressed {
+                explainer: s.kind,
+                name: s.name,
                 by: s.by,
-                packer: s.packer,
             });
             breakdown.push(entry);
             continue;
@@ -279,8 +315,9 @@ mod tests {
     fn suppressed_findings_score_nothing_and_use_no_cap() {
         let mut sup = f("S", S::Medium, C::High, Cat::Packing);
         sup.suppressed = Some(Suppression {
-            by: PACKER_FINDING,
-            packer: "UPX",
+            kind: ExplainerKind::Packer,
+            name: "UPX",
+            by: Some(PACKER_FINDING),
         });
         let r = compute(&[
             sup,
@@ -293,7 +330,7 @@ mod tests {
         assert_eq!(s.points, 0);
         assert!(matches!(
             s.reduced_by,
-            Some(Reduction::Suppressed { packer: "UPX", .. })
+            Some(Reduction::Suppressed { name: "UPX", .. })
         ));
     }
 
@@ -380,8 +417,9 @@ mod tests {
                 assert_eq!(
                     rwx.suppressed,
                     Some(Suppression {
-                        by: "PE-PACKER-KNOWN",
-                        packer: "UPX"
+                        kind: ExplainerKind::Packer,
+                        name: "UPX",
+                        by: Some("PE-PACKER-KNOWN"),
                     })
                 );
                 let entry = r
@@ -516,6 +554,109 @@ mod tests {
         fn non_pe_files_score_zero() {
             let r = analyze(b"plain text, nothing to see".to_vec());
             assert_eq!((r.risk.score, r.risk.level), (0, RiskLevel::CleanLooking));
+        }
+    }
+
+    mod elf_end_to_end {
+        use super::super::*;
+        use crate::config::Config;
+        use crate::input::Input;
+        use crate::Registry;
+        use rtriage_fixtures::elf::{profiles, ElfBuilder};
+
+        fn analyze(bytes: Vec<u8>) -> Report {
+            let r = Registry::default().analyze(&Input::from_bytes("t", bytes), &Config::default());
+            assert!(r.errors.is_empty(), "{:?}", r.errors);
+            r
+        }
+
+        fn ids(r: &Report, suppressed: bool) -> Vec<&'static str> {
+            let mut v: Vec<_> = r
+                .findings
+                .iter()
+                .filter(|f| f.suppressed.is_some() == suppressed)
+                .map(|f| f.id)
+                .collect();
+            v.sort_unstable();
+            v
+        }
+
+        /// Positive: confirmed UPX ELF scores only for being packed.
+        #[test]
+        fn confirmed_upx_elf_scores_only_the_packer() {
+            let r = analyze(profiles::upx_elf().build().bytes);
+            assert_eq!(
+                ids(&r, true),
+                [
+                    "ELF-PACKED-LIKELY",
+                    "ELF-SECTIONS-MISSING",
+                    "ELF-SEGMENT-HIGH-ENTROPY",
+                    "ELF-SEGMENT-RWX"
+                ],
+                "{:#?}",
+                r.risk.breakdown
+            );
+            assert!(ids(&r, false).contains(&"ELF-PACKER-KNOWN"));
+            assert_eq!(r.analysis_limited, [AnalysisLimit::Packed]);
+            // Packer 15 + ELF-HARDENING-NO-PIE (Low/Low) 2: the stub is ET_EXEC,
+            // and hardening is not something UPX is agreed to explain.
+            assert_eq!(r.risk.score, 17, "{:#?}", r.risk.breakdown);
+            assert_eq!(r.risk.level, RiskLevel::Low, "{:#?}", r.risk.breakdown);
+            let s = r
+                .findings
+                .iter()
+                .find(|f| f.id == "ELF-SEGMENT-RWX")
+                .unwrap();
+            assert_eq!(
+                s.suppressed,
+                Some(Suppression {
+                    kind: ExplainerKind::Packer,
+                    name: "UPX",
+                    by: Some("ELF-PACKER-KNOWN"),
+                })
+            );
+        }
+
+        /// Negative: a spoofed `UPX!` magic without the banner is not confirmed.
+        #[test]
+        fn spoofed_upx_magic_suppresses_nothing() {
+            let bytes = ElfBuilder::x86_64()
+                .section_headers(false)
+                .after_phdrs(b"\0\0\0\0UPX!".to_vec())
+                .text((0..8192).map(|i| (i % 256) as u8).collect())
+                .build()
+                .bytes;
+            let r = analyze(bytes);
+            assert!(ids(&r, false).contains(&"ELF-PACKER-KNOWN"));
+            assert!(ids(&r, true).is_empty(), "{:?}", ids(&r, true));
+        }
+
+        /// Runtime facts explain only small hardening findings.
+        #[test]
+        fn go_runtime_explains_hardening_only() {
+            let r = analyze(profiles::go_static().build().bytes);
+            let sup = ids(&r, true);
+            assert!(
+                !sup.is_empty(),
+                "{:#?}",
+                r.findings.iter().map(|f| f.id).collect::<Vec<_>>()
+            );
+            for id in &sup {
+                assert!(crate::rules::RUNTIME_EXPLAINABLE_IDS.contains(id), "{id}");
+                let f = r.findings.iter().find(|f| f.id == *id).unwrap();
+                assert_eq!(
+                    f.suppressed.as_ref().map(|s| (s.kind, s.name, s.by)),
+                    Some((ExplainerKind::Runtime, "go", None))
+                );
+            }
+            assert_eq!(r.risk.level, RiskLevel::CleanLooking);
+            assert!(r.analysis_limited.is_empty());
+        }
+
+        #[test]
+        fn non_go_static_binary_keeps_hardening_points() {
+            let r = analyze(profiles::busybox_static().build().bytes);
+            assert!(ids(&r, true).is_empty(), "{:?}", ids(&r, true));
         }
     }
 }

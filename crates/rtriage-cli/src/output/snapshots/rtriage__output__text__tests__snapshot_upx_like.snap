@@ -25,24 +25,24 @@ Findings
       - import KERNEL32.DLL!GetProcAddress
       - imported functions = 6
       ATT&CK: T1027.007
-      (explained by UPX via PE-PACKER-KNOWN: not scored)
+      (explained by UPX (PE-PACKER-KNOWN): not scored)
   [MEDIUM] PE-SECTION-HIGH-ENTROPY  Executable section looks compressed or encrypted  (confidence: medium, packing)
       Section data has entropy >= 7.20 bits/byte. In code this means packed or encrypted instructions; in data sections it is often just compressed resources (images, archives), hence lower severity there.
       - section #1 "UPX1"
       - entropy = 8.000
-      (explained by UPX via PE-PACKER-KNOWN: not scored)
+      (explained by UPX (PE-PACKER-KNOWN): not scored)
   [MEDIUM] PE-SECTION-RWX  Writable and executable section  (confidence: medium, anomaly)
       A section that is both writable and executable lets code modify itself in place, typical of packers, self-decrypting loaders and shellcode stubs. Normal compilers keep code read-only.
       - section #0 "UPX0"
       - Characteristics = 0xe0000020 (rwx)
       - section #1 "UPX1"
       - Characteristics = 0xe0000020 (rwx)
-      (explained by UPX via PE-PACKER-KNOWN: not scored)
+      (explained by UPX (PE-PACKER-KNOWN): not scored)
   [MEDIUM] PE-SECTION-VIRTUAL-ONLY  Executable section with no data on disk  (confidence: medium, packing)
       An executable section occupies memory but has no bytes in the file: it is filled at run time, the classic layout of packers (e.g. UPX0) that decompress code into it. Uninitialized-data sections (.bss) are not executable and are not reported.
       - section #0 "UPX0"
       - VirtualSize = 0x20000 (SizeOfRawData 0)
-      (explained by UPX via PE-PACKER-KNOWN: not scored)
+      (explained by UPX (PE-PACKER-KNOWN): not scored)
   [LOW] PE-TLS-CALLBACKS  TLS callbacks run before the entry point  (confidence: medium, anti_analysis)
       1 TLS callback(s) execute before the entry point, so a debugger breaking at the entry point misses them; used for anti-debugging and early unpacking. Rust and MinGW runtimes also register TLS callbacks.
       - callback = 0x401000 in #0 UPX0
@@ -51,7 +51,7 @@ Findings
       - AddressOfEntryPoint = 0x00021100
       - section #1 "UPX1"
       - first executable section = #0 UPX0
-      (explained by UPX via PE-PACKER-KNOWN: not scored)
+      (explained by UPX (PE-PACKER-KNOWN): not scored)
   [INFO] PE-OVERLAY  Data appended after the image  (confidence: high, anomaly)
       Bytes after the last section are not loaded by Windows. Installers and self-extracting archives keep their payload there; so do droppers.
       - range 0x00002800 (+21 bytes)
@@ -67,7 +67,7 @@ Findings
       Section names not produced by common toolchains (MSVC, Clang, GCC/MinGW, Delphi, Go, drivers). Often set by packers and protectors; also by custom linkers.
       - section #0 "UPX0"
       - section #1 "UPX1"
-      (explained by UPX via PE-PACKER-KNOWN: not scored)
+      (explained by UPX (PE-PACKER-KNOWN): not scored)
 
 Score breakdown  score 19 = sum of points below; level low
   points  finding                          category           note

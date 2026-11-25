@@ -211,7 +211,9 @@ fn json_carries_breakdown_suppression_and_packed_flag() {
         .iter()
         .find(|f| f["id"] == "PE-SECTION-RWX")
         .unwrap();
-    assert_eq!(rwx["suppressed"]["packer"], "UPX");
+    assert_eq!(rwx["suppressed"]["kind"], "packer");
+    assert_eq!(rwx["suppressed"]["name"], "UPX");
+    assert_eq!(rwx["suppressed"]["by"], "PE-PACKER-KNOWN");
     assert!(r["risk"]["breakdown"]
         .as_array()
         .unwrap()

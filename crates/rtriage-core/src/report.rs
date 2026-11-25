@@ -57,6 +57,8 @@ pub struct Facts {
     pub pe: Option<PeFacts>,
     /// ELF-specific facts; `None` for non-ELF input.
     pub elf: Option<ElfFacts>,
+    /// Language runtime (Go, Rust), any format; `None` if not recognised.
+    pub runtime: Option<RuntimeFacts>,
 }
 
 /// ELF facts; each part is filled by its own analyzer.
@@ -74,6 +76,25 @@ pub struct ElfFacts {
     pub dynamic: Option<ElfDynamicFacts>,
     /// checksec-style hardening summary.
     pub checksec: Option<ElfChecksec>,
+    /// Known packers detected (empty if none).
+    pub packers: Option<Vec<PePackerFacts>>,
+    /// Notes from `PT_NOTE` segments.
+    pub notes: Option<ElfNotes>,
+}
+
+/// Selected ELF notes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ElfNotes {
+    /// `NT_GNU_BUILD_ID`, lowercase hex.
+    pub build_id: Option<String>,
+    /// Go build ID (`Go` note, type 4).
+    pub go_build_id: Option<String>,
+    /// `NT_GNU_ABI_TAG`, e.g. `linux 3.2.0`.
+    pub abi_tag: Option<String>,
+    /// Number of notes read.
+    pub count: usize,
+    /// `true` if reading stopped at `max_notes`.
+    pub limit_reached: bool,
 }
 
 /// Dynamic linking information (from `PT_DYNAMIC`).
@@ -808,9 +829,9 @@ pub struct Finding {
     pub evidence: Vec<Evidence>,
     /// MITRE ATT&CK technique IDs, e.g. `"T1055"`.
     pub attack: Vec<&'static str>,
-    /// Set when the finding is explained by a confirmed packer: it stays in
-    /// the report for the analyst but contributes no points and consumes no
-    /// category cap.
+    /// Set when the finding is explained by a confirmed packer or runtime: it
+    /// stays in the report for the analyst but contributes no points and
+    /// consumes no category cap.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suppressed: Option<Suppression>,
 }
@@ -818,10 +839,34 @@ pub struct Finding {
 /// Why a finding does not count towards the score.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Suppression {
-    /// ID of the finding that explains this one (e.g. `PE-PACKER-KNOWN`).
-    pub by: &'static str,
-    /// Packer whose confirmed presence explains it (e.g. `UPX`).
-    pub packer: &'static str,
+    /// What explains it.
+    pub kind: ExplainerKind,
+    /// Name of the packer or runtime (e.g. `UPX`, `Go`).
+    pub name: &'static str,
+    /// ID of the finding naming the explainer (e.g. `PE-PACKER-KNOWN`);
+    /// `null` for runtimes, which are facts, not findings.
+    pub by: Option<&'static str>,
+}
+
+/// Kind of thing that can explain a finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExplainerKind {
+    /// A confirmed packer (`rules/packers.toml` `[[packer]]`).
+    Packer,
+    /// A confirmed language runtime (`rules/packers.toml` `[[runtime]]`).
+    Runtime,
+}
+
+/// Language runtime recognised from several independent indicators.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RuntimeFacts {
+    /// `go` or `rust`.
+    pub language: &'static str,
+    /// Version if recorded (e.g. `go1.22.5`); `null` otherwise.
+    pub version: Option<String>,
+    /// Independent indicators found, in fixed order.
+    pub indicators: Vec<&'static str>,
 }
 
 impl Finding {
@@ -922,12 +967,14 @@ pub struct ScoreEntry {
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Reduction {
-    /// Explained by a confirmed packer (see [`Finding::suppressed`]).
+    /// Explained by a confirmed packer or runtime (see [`Finding::suppressed`]).
     Suppressed {
-        /// Explaining finding ID.
-        by: &'static str,
-        /// Packer name.
-        packer: &'static str,
+        /// Packer or runtime.
+        explainer: ExplainerKind,
+        /// Its name.
+        name: &'static str,
+        /// Finding naming it, if any.
+        by: Option<&'static str>,
     },
     /// Another finding with the same ID already counted.
     Duplicate,

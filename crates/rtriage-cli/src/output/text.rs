@@ -9,8 +9,8 @@ use std::io::{self, Write};
 
 use anstyle::{AnsiColor, Style};
 use rtriage_core::report::{
-    AnalysisLimit, ElfFacts, ElfHeaderFacts, PeExportsFacts, PeResourcesFacts, Reduction,
-    SignatureStatus,
+    AnalysisLimit, ElfFacts, ElfHeaderFacts, ExplainerKind, PeExportsFacts, PeResourcesFacts,
+    Reduction, SignatureStatus,
 };
 use rtriage_core::report::{
     EntropyFacts, ExtractedString, PeImportsFacts, PeSectionFacts, StringEncoding, StringKind,
@@ -166,9 +166,14 @@ fn render_explain(risk: &Risk, out: &mut dyn Write, p: &Painter) -> io::Result<(
         let note = match &e.reduced_by {
             None if e.table_points == 0 => "informational".to_owned(),
             None => String::new(),
-            Some(Reduction::Suppressed { by, packer }) => {
-                format!("explained by {packer} ({by}), not scored")
-            }
+            Some(Reduction::Suppressed {
+                explainer,
+                name,
+                by,
+            }) => format!(
+                "explained by {}, not scored",
+                explainer_label(*explainer, name, *by)
+            ),
             Some(Reduction::Duplicate) => "duplicate ID, counted once".to_owned(),
             Some(Reduction::CategoryCap { cap }) => {
                 format!(
@@ -226,8 +231,8 @@ fn render_findings(findings: &[Finding], out: &mut dyn Write, p: &Painter) -> io
                 out,
                 "      {}",
                 p.label(&format!(
-                    "(explained by {} via {}: not scored)",
-                    s.packer, s.by
+                    "(explained by {}: not scored)",
+                    explainer_label(s.kind, s.name, s.by)
                 ))
             )?;
         }
@@ -920,6 +925,24 @@ fn group_digits(n: u64) -> String {
         out.push(c);
     }
     out
+}
+
+/// `UPX (PE-PACKER-KNOWN)` for packers, `the Go runtime` for runtimes.
+fn explainer_label(kind: ExplainerKind, name: &str, by: Option<&str>) -> String {
+    match (kind, by) {
+        (ExplainerKind::Runtime, _) => format!("the {} runtime", runtime_display(name)),
+        (_, Some(by)) => format!("{name} ({by})"),
+        (_, None) => name.to_owned(),
+    }
+}
+
+/// Display name of a runtime (`go` -> `Go`).
+fn runtime_display(name: &str) -> &str {
+    match name {
+        "go" => "Go",
+        "rust" => "Rust",
+        other => other,
+    }
 }
 
 #[cfg(test)]
