@@ -11,5 +11,16 @@
 )]
 #![warn(missing_docs)]
 
+pub mod error;
+pub mod limits;
+pub mod report;
+
+pub use error::{AnalysisError, Error};
+pub use limits::Limits;
+pub use report::{
+    Category, Confidence, Evidence, Facts, FileInfo, Finding, Format, Report, ReportBuilder, Risk,
+    RiskLevel, Severity,
+};
+
 /// Crate version, as recorded in `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
