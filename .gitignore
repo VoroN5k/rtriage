@@ -1,0 +1,15 @@
+/target
+**/*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+
+# cargo-fuzz
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts
+
+# insta
+*.snap.new
+*.pending-snap

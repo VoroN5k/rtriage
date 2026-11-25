@@ -1,0 +1,17 @@
+[package]
+name = "rtriage-cli"
+description = "Command-line interface for rtriage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "rtriage"
+path = "src/main.rs"
+
+[dependencies]
+rtriage-core = { path = "../rtriage-core" }
+
+[lints]
+workspace = true
