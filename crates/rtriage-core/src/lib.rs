@@ -26,6 +26,7 @@ pub mod input;
 pub mod limits;
 pub mod report;
 pub mod rules;
+pub mod rules_dir;
 pub mod scoring;
 
 pub use analyzers::{AnalysisContext, Analyzer, Registry};

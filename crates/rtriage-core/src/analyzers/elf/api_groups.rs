@@ -7,7 +7,7 @@
 //! non-stripped static binaries) is reported with low confidence.
 
 use super::dynamic::ElfDynamic;
-use crate::analyzers::rule_engine::{self, SymbolView};
+use crate::analyzers::rule_engine::{self, SymbolView, TextView};
 use crate::analyzers::{AnalysisContext, Analyzer};
 use crate::error::AnalysisError;
 use crate::report::{Format, ReportBuilder};
@@ -47,7 +47,12 @@ impl Analyzer for ElfApiGroupsAnalyzer {
             &primary,
             extended.as_ref(),
             &ctx.deadline,
-            &mut || ctx.strings(),
+            &mut || {
+                Ok(TextView {
+                    strings: ctx.strings()?,
+                    iocs: ctx.iocs()?,
+                })
+            },
         )?;
         for f in findings {
             out.push_finding(f);
@@ -351,6 +356,38 @@ mod tests {
     fn socket_client_with_ip_is_network() {
         let r = run(elf(&["socket", "connect", "send"], &["45.13.227.8"]));
         assert_eq!(api(&r), ["ELF-API-NETWORK"]);
+    }
+
+    #[test]
+    fn local_and_allowlisted_endpoints_are_not_network() {
+        for s in [
+            "127.0.0.1",
+            "http://localhost:8080/health",
+            "http://api.localhost/v1",
+            "172.16.0.10",
+            "169.254.169.254",
+            "100.64.0.1",
+            "203.0.113.9",
+            "fe80::1:2:3",
+            "http://10.0.0.1:9000/metrics",
+            "https://www.openssl.org/docs/",
+        ] {
+            let r = run(elf(&["socket", "connect", "send"], &[s]));
+            assert!(!api(&r).contains(&"ELF-API-NETWORK"), "{s}");
+        }
+    }
+
+    #[test]
+    fn version_strings_are_not_endpoints() {
+        for s in [
+            "10.0.19041.1",
+            "6.1.7601.17514",
+            "version 1.2.3.4",
+            "libfoo.so.1.2.3.4",
+        ] {
+            let r = run(elf(&["socket", "connect"], &[s]));
+            assert!(!api(&r).contains(&"ELF-API-NETWORK"), "{s}");
+        }
     }
 
     #[test]

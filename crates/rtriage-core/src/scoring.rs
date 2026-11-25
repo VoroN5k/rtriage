@@ -588,6 +588,7 @@ mod tests {
             assert_eq!(
                 ids(&r, true),
                 [
+                    "ELF-HARDENING-NO-PIE",
                     "ELF-PACKED-LIKELY",
                     "ELF-SECTIONS-MISSING",
                     "ELF-SEGMENT-HIGH-ENTROPY",
@@ -598,9 +599,8 @@ mod tests {
             );
             assert!(ids(&r, false).contains(&"ELF-PACKER-KNOWN"));
             assert_eq!(r.analysis_limited, [AnalysisLimit::Packed]);
-            // Packer 15 + ELF-HARDENING-NO-PIE (Low/Low) 2: the stub is ET_EXEC,
-            // and hardening is not something UPX is agreed to explain.
-            assert_eq!(r.risk.score, 17, "{:#?}", r.risk.breakdown);
+            // Only the packer finding scores; the ET_EXEC stub's NO-PIE is explained.
+            assert_eq!(r.risk.score, 15, "{:#?}", r.risk.breakdown);
             assert_eq!(r.risk.level, RiskLevel::Low, "{:#?}", r.risk.breakdown);
             let s = r
                 .findings

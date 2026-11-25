@@ -111,7 +111,10 @@ necessarily causes are explained by it.
   `PE-SECTION-NAME-UNUSUAL`, `PE-ENTRYPOINT-UNUSUAL`,
   `PE-IMPORTS-DYNAMIC-RESOLUTION`, `PE-IMPORTS-FEW`, `PE-PACKED-LIKELY`,
   `PE-RESOURCE-HIGH-ENTROPY`; ELF: `ELF-SECTIONS-MISSING`, `ELF-SEGMENT-RWX`,
-  `ELF-SEGMENT-HIGH-ENTROPY`, `ELF-PACKED-LIKELY`.
+  `ELF-SEGMENT-HIGH-ENTROPY`, `ELF-PACKED-LIKELY`, `ELF-HARDENING-NO-PIE`,
+  `ELF-HARDENING-NO-RELRO` (the stub's hardening says nothing about the packed
+  program). `ELF-HARDENING-EXEC-STACK` is **not** explained until checked
+  against a real UPX-packed binary.
   **API behavior groups (`PE-API-*`, `ELF-API-*`) are never suppressed**: the loader
   rejects them, and the scorer skips them even if a rule slipped through.
 - **Effect.** A suppressed finding stays in `findings` with
@@ -148,7 +151,7 @@ necessarily causes are explained by it.
 | Confirmed UPX + encrypted `RT_RCDATA` | 15 (resource finding explained) | low, `packed` |
 | Reflective-loader DLL + injection chain | 40 + 40, injection cap 40 | medium or above |
 | Any file, signed vs. unsigned | identical score | unchanged |
-| Confirmed UPX ELF (non-PIE stub), nothing else | 15 + 2 (`ELF-HARDENING-NO-PIE`, not explained) = 17; sections-missing, RWX, entropy, packed-likely explained | low, `packed` |
+| Confirmed UPX ELF (non-PIE stub), nothing else | 15 (sections-missing, RWX, entropy, packed-likely, no-PIE explained) | low, `packed` |
 | Spoofed `UPX!` on a section-less RWX ELF (no banner) | nothing suppressed | full score |
 | Go static ELF (runtime recognised) | no-PIE / no-RELRO explained | clean_looking |
 
@@ -375,8 +378,9 @@ functions are used.
 
 The groups are **data**, in [`rules/api_groups.toml`](../rules/api_groups.toml):
 each group's rationale and false positives are written next to its
-conditions there. The bundled file is compiled in; `--api-rules <FILE>`
-replaces it with a file of the same format (validated strictly: unknown
+conditions there. The bundled file is compiled in; `api_groups.toml` in a
+`--rules-dir` (see [Custom rules](#custom-rules---rules-dir)) replaces it, or
+merges with it (`include_defaults = true`). Files are validated strictly: unknown
 fields, bad enum values, malformed or duplicate IDs, IDs without the
 `PE-API-` prefix and bad API patterns are load errors, exit code 2).
 
@@ -702,6 +706,25 @@ the process (library hijacking).
 embedded builds. Exec stack: code using nested-function trampolines. RPATH:
 build-tree paths accidentally left in development builds.
 
+### Network kinds in rules: IP scope and allowlist
+
+In every behavior rule (PE and ELF) the string kinds `url`, `domain`, `ipv4`,
+`ipv6` and `email` are matched on **IOCs**, not raw string classes:
+
+- allowlisted IOCs never count (`http://schemas.microsoft.com/...` does not
+  make a WinHTTP user a C2 client);
+- IPs, and URLs with an IP host, count only if their scope is in the
+  condition's `ip_scopes`, default `["public"]`; `localhost` /
+  `*.localhost` URL hosts are loopback (RFC 6761). A rule can widen it, e.g.
+  `strings = { kinds = ["ipv4"], ip_scopes = ["private"] }`. `ip_scopes` is
+  rejected without an IP-bearing kind, and when empty;
+- version strings (`10.0.19041.1`, `6.1.7601.17514`, `FileVersion 1.0.0.1`)
+  are not IPs at all (classifier rules), so they never count.
+
+Negative tests (PE and ELF network groups): loopback, RFC 1918, link-local,
+CGNAT, documentation ranges, `[::1]`, `fe80::`, `localhost` URLs,
+allowlisted CA/schema URLs and version strings.
+
 ### ELF API behavior groups (`elf-api-groups` analyzer)
 
 Data in [`rules/elf_api_groups.toml`](../rules/elf_api_groups.toml), same
@@ -815,7 +838,7 @@ using string kinds directly.
   toolchains. Allowlisted IOCs stay in JSON (`allowlisted: true`); text
   output hides them behind a count. Code/file hosting (GitHub, Pastebin,
   Discord, ...) is deliberately absent: malware abuses it. IPs are never
-  allowlisted. `Config::ioc_allowlist` replaces the bundled list.
+  allowlisted. `ioc_allowlist.toml` in `--rules-dir` **adds** to the bundled list.
 - **Defang.** `value_defanged` is always in JSON: `hxxp://`, `hxxps://`,
   `fxp://`, dots in hosts/domains/IPv4 as `[.]`, IPv6 colons as `[:]`,
   emails as `user[@]evil[.]com`. `--defang` applies the same to IOCs,
@@ -826,6 +849,26 @@ using string kinds directly.
 - **False positives.** Domain matching needs a whitelisted TLD, so
   `kernel32.dll`, `setup.exe` and .NET namespaces are not domains; Go module
   paths (`golang.org/x/...`) are allowlisted.
+
+### Custom rules (`--rules-dir`)
+
+`--rules-dir <DIR>` layers a directory over the bundled rules. Only these
+file names are read; each is optional and falls back to the bundled one:
+
+| File | Effect |
+|---|---|
+| `api_groups.toml` | PE groups: **replace** the bundled ones; with `include_defaults = true` merge instead (same ID replaces in place, new IDs appended) |
+| `elf_api_groups.toml` | ELF groups: same rules, `ELF-API-` IDs |
+| `packers.toml` | Packer / runtime explanations: same (entries keyed by name + format / name) |
+| `ioc_allowlist.toml` | Domains **added** to the bundled allowlist |
+
+Limits are those of the bundled data, per file and for merged sets (1 MiB
+per file, checked before reading; 256 groups; 10 000 allowlist domains).
+The validators are the same too, so a custom `packers.toml` can still never
+explain an API group. An invalid file is a usage error (exit code 2) naming
+the file; other `.toml` files in the directory are reported as warnings
+(likely typos), and a directory with no known file warns that only bundled
+rules apply.
 
 ### Facts that suppress heuristics
 

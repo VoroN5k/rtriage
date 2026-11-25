@@ -139,11 +139,18 @@ fn bundled_api_rules_apply_by_default() {
     assert!(finding_ids(&json(&out)).contains(&"PE-API-INJECTION".to_owned()));
 }
 
-#[test]
-fn custom_api_rules_replace_bundled() {
-    let rules = scratch(
-        "custom-rules.toml",
-        br#"
+/// A rules directory under cargo's per-target temp dir with `files`.
+fn rules_dir(name: &str, files: &[(&str, &[u8])]) -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for (file, contents) in files {
+        std::fs::write(dir.join(file), contents).unwrap();
+    }
+    dir
+}
+
+const BEEP_RULES: &[u8] = br#"
 schema_version = 1
 [[group]]
 id = "PE-API-BEEP"
@@ -154,11 +161,14 @@ category = "metadata"
 rationale = "Imports Beep."
 [[group.when]]
 slots = [["Beep"]]
-"#,
-    );
+"#;
+
+#[test]
+fn rules_dir_api_rules_replace_bundled() {
+    let dir = rules_dir("rules-replace", &[("api_groups.toml", BEEP_RULES)]);
     let out = rtriage(&[
-        "--api-rules",
-        rules.to_str().unwrap(),
+        "--rules-dir",
+        dir.to_str().unwrap(),
         injection_pe("inject-2.exe").to_str().unwrap(),
     ]);
     assert_eq!(out.status.code(), Some(0));
@@ -168,27 +178,108 @@ slots = [["Beep"]]
 }
 
 #[test]
-fn invalid_api_rules_are_a_usage_error() {
-    let rules = scratch(
-        "bad-rules.toml",
-        b"schema_version = 1\n[[group]]\nid = \"nope\"\n",
+fn rules_dir_include_defaults_keeps_bundled() {
+    let mut text = b"include_defaults = true\n".to_vec();
+    text.extend_from_slice(BEEP_RULES);
+    let dir = rules_dir("rules-merge", &[("api_groups.toml", &text)]);
+    let out = rtriage(&[
+        "--rules-dir",
+        dir.to_str().unwrap(),
+        injection_pe("inject-4.exe").to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(0));
+    let ids = finding_ids(&json(&out));
+    assert!(ids.contains(&"PE-API-BEEP".to_owned()));
+    assert!(ids.contains(&"PE-API-INJECTION".to_owned()));
+}
+
+#[test]
+fn rules_dir_allowlist_is_added() {
+    let dir = rules_dir(
+        "rules-allow",
+        &[(
+            "ioc_allowlist.toml",
+            b"schema_version = 1\ndomains = [\"corp.example.ru\"]\n",
+        )],
+    );
+    let f = scratch(
+        "allow.bin",
+        b"\0\0http://intranet.corp.example.ru/x\0http://schemas.microsoft.com/y\0http://c2.evil.top/z\0",
+    );
+    let v = json(&rtriage(&[
+        "--rules-dir",
+        dir.to_str().unwrap(),
+        f.to_str().unwrap(),
+    ]));
+    let items = v["reports"][0]["facts"]["iocs"]["items"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let allowlisted = |value: &str| {
+        items
+            .iter()
+            .find(|i| i["value"] == value)
+            .map(|i| i["allowlisted"].as_bool().unwrap())
+            .unwrap()
+    };
+    assert!(allowlisted("http://intranet.corp.example.ru/x"));
+    assert!(allowlisted("http://schemas.microsoft.com/y"));
+    assert!(!allowlisted("http://c2.evil.top/z"));
+}
+
+#[test]
+fn invalid_rules_file_is_a_usage_error() {
+    let dir = rules_dir(
+        "rules-bad",
+        &[(
+            "api_groups.toml",
+            b"schema_version = 1\n[[group]]\nid = \"nope\"\n",
+        )],
     );
     let out = rtriage(&[
-        "--api-rules",
-        rules.to_str().unwrap(),
+        "--rules-dir",
+        dir.to_str().unwrap(),
         injection_pe("inject-3.exe").to_str().unwrap(),
     ]);
     assert_eq!(out.status.code(), Some(2));
     assert!(out.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot load API rules"));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("cannot load rules") && err.contains("api_groups.toml"),
+        "{err}"
+    );
 }
 
 #[test]
-fn missing_api_rules_file_is_a_usage_error() {
-    let out = rtriage(&["--api-rules", "no-such-rules.toml", "x.bin"]);
+fn missing_rules_dir_is_a_usage_error() {
+    let out = rtriage(&["--rules-dir", "no-such-rules-dir", "x.bin"]);
     assert_eq!(out.status.code(), Some(2));
 }
 
+#[test]
+fn unknown_rules_files_are_warned_about() {
+    let dir = rules_dir("rules-typo", &[("api-groups.toml", BEEP_RULES)]);
+    let out = rtriage(&[
+        "--rules-dir",
+        dir.to_str().unwrap(),
+        injection_pe("inject-5.exe").to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(0));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("ignoring unknown rules file api-groups.toml"),
+        "{err}"
+    );
+    assert!(err.contains("no known rules files"), "{err}");
+    // Bundled rules still apply.
+    assert!(finding_ids(&json(&out)).contains(&"PE-API-INJECTION".to_owned()));
+}
+
+#[test]
+fn api_rules_flag_is_gone() {
+    let out = rtriage(&["--api-rules", "x.toml", "x.bin"]);
+    assert_eq!(out.status.code(), Some(2));
+}
 fn upx_pe(name: &str) -> PathBuf {
     let bytes = rtriage_fixtures::pe::profiles::upx_like(rtriage_fixtures::pe::Arch::X86)
         .build()

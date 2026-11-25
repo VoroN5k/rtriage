@@ -16,8 +16,11 @@ use sha2::{Digest, Sha256};
 
 use crate::analyzers::strings::classify::classifier;
 use crate::analyzers::{AnalysisContext, Analyzer};
+use crate::deadline::Deadline;
 use crate::error::AnalysisError;
-use crate::report::{Format, Ioc, IocFacts, IocKind, IpScope, ReportBuilder, StringKind};
+use crate::report::{
+    Format, Ioc, IocFacts, IocKind, IpScope, ReportBuilder, StringKind, StringsFacts,
+};
 use crate::rules::{RulesError, MAX_RULES_FILE_SIZE, SCHEMA_VERSION};
 
 /// The allowlist shipped with rtriage.
@@ -105,6 +108,27 @@ impl IocAllowlist {
         Ok(Self { domains })
     }
 
+    /// Union of `self` and `defaults` (allowlists only ever add). The merged
+    /// list obeys the same entry limit as a single file.
+    ///
+    /// # Errors
+    /// [`RulesError::TooManyGroups`] if the union is too large.
+    pub fn merged_over(self, defaults: &IocAllowlist) -> Result<IocAllowlist, RulesError> {
+        let mut domains = defaults.domains.clone();
+        for d in self.domains {
+            if !domains.contains(&d) {
+                domains.push(d);
+            }
+        }
+        if domains.len() > MAX_ALLOWLIST_ENTRIES {
+            return Err(RulesError::TooManyGroups {
+                count: domains.len(),
+            });
+        }
+        domains.sort();
+        Ok(IocAllowlist { domains })
+    }
+
     /// `true` if `domain` (lowercase) is listed or a subdomain of a listed one.
     pub fn allows_domain(&self, domain: &str) -> bool {
         self.domains.iter().any(|d| {
@@ -132,35 +156,72 @@ impl Analyzer for IocAnalyzer {
     }
 
     fn run(&self, ctx: &AnalysisContext<'_>, out: &mut ReportBuilder) -> Result<(), AnalysisError> {
-        let strings = ctx.strings()?;
-        let classifier = classifier().map_err(|e| AnalysisError::Internal {
-            reason: format!("built-in string pattern is invalid: {e}"),
-        })?;
-        let allow: &IocAllowlist = match &ctx.config.ioc_allowlist {
-            Some(custom) => custom,
-            None => IocAllowlist::bundled().map_err(|e| AnalysisError::Internal {
-                reason: format!("bundled IOC allowlist is invalid: {e}"),
-            })?,
-        };
-        let mut acc = Accumulator::new(ctx.config.limits.max_iocs);
-        for (i, s) in strings.items.iter().enumerate() {
-            if i % DEADLINE_STRIDE == 0 {
-                ctx.deadline.check()?;
-            }
-            if !s.kinds.iter().any(|k| IOC_STRING_KINDS.contains(k)) {
+        out.facts.iocs = Some(ctx.iocs()?.clone());
+        Ok(())
+    }
+}
+
+/// Extracts IOCs from `strings` (normally via [`AnalysisContext::iocs`]).
+///
+/// # Errors
+/// [`AnalysisError::Timeout`] from `deadline`, [`AnalysisError::Internal`]
+/// if a built-in pattern is invalid.
+pub fn extract(
+    strings: &StringsFacts,
+    allow: &IocAllowlist,
+    max_iocs: usize,
+    deadline: &Deadline,
+) -> Result<IocFacts, AnalysisError> {
+    let classifier = classifier().map_err(|e| AnalysisError::Internal {
+        reason: format!("built-in string pattern is invalid: {e}"),
+    })?;
+    let mut acc = Accumulator::new(max_iocs);
+    for (i, s) in strings.items.iter().enumerate() {
+        if i % DEADLINE_STRIDE == 0 {
+            deadline.check()?;
+        }
+        if !s.kinds.iter().any(|k| IOC_STRING_KINDS.contains(k)) {
+            continue;
+        }
+        for span in classifier.ioc_spans(&s.value) {
+            let Some(raw) = s.value.get(span.start..span.end) else {
                 continue;
-            }
-            for span in classifier.ioc_spans(&s.value) {
-                let Some(raw) = s.value.get(span.start..span.end) else {
-                    continue;
-                };
-                for (kind, value) in normalize(span.kind, raw) {
-                    acc.add(kind, value, s.offset);
-                }
+            };
+            for (kind, value) in normalize(span.kind, raw) {
+                acc.add(kind, value, s.offset);
             }
         }
-        out.facts.iocs = Some(acc.finish(allow));
-        Ok(())
+    }
+    Ok(acc.finish(allow))
+}
+
+/// The IOC kind a rule's string kind is evaluated against, if any. Network
+/// kinds are matched on IOCs so scope and allowlisting apply; the rest stay
+/// plain string classifications.
+pub fn ioc_kind_for(kind: StringKind) -> Option<IocKind> {
+    match kind {
+        StringKind::Url => Some(IocKind::Url),
+        StringKind::Domain => Some(IocKind::Domain),
+        StringKind::Ipv4 => Some(IocKind::Ipv4),
+        StringKind::Ipv6 => Some(IocKind::Ipv6),
+        StringKind::Email => Some(IocKind::Email),
+        _ => None,
+    }
+}
+
+/// Scope an IOC is judged by: its own for IPs, its host's for URLs with an
+/// IP host (`localhost` counts as loopback), `None` otherwise.
+pub fn effective_scope(ioc: &Ioc) -> Option<IpScope> {
+    match ioc.kind {
+        IocKind::Ipv4 | IocKind::Ipv6 => ioc.scope,
+        IocKind::Url => {
+            let u = split_url(&ioc.value)?;
+            if u.host == "localhost" || u.host.ends_with(".localhost") {
+                return Some(IpScope::Loopback); // RFC 6761
+            }
+            scope_of(IocKind::Ipv4, &u.host).or_else(|| scope_of(IocKind::Ipv6, &u.host))
+        }
+        _ => None,
     }
 }
 

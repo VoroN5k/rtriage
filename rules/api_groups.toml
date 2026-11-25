@@ -22,7 +22,10 @@
 # docs/heuristics.md together with the scoring table. Changing a group's
 # `id` breaks report consumers: add a changelog note.
 #
-# A custom file with the same format can replace this one: --api-rules <FILE>.
+# Your own api_groups.toml in --rules-dir <DIR> replaces this file, or merges
+# with it when it sets `include_defaults = true`. Network string kinds (url,
+# domain, ipv4, ipv6, email) count only non-allowlisted IOCs; IPs only in
+# `ip_scopes` (default ["public"]). See docs/heuristics.md.
 
 schema_version = 1
 

@@ -49,6 +49,9 @@ explains = [
     "ELF-SEGMENT-RWX",           # the stub unpacks in place
     "ELF-SEGMENT-HIGH-ENTROPY",  # compressed program
     "ELF-PACKED-LIKELY",         # same shape, now with a name
+    "ELF-HARDENING-NO-PIE",      # the stub is ET_EXEC whatever the original was
+    "ELF-HARDENING-NO-RELRO",    # the stub has no PT_GNU_RELRO; says nothing about the original
+    # ELF-HARDENING-EXEC-STACK: not until verified on a real UPX-packed hello
 ]
 
 [[runtime]]

@@ -4,13 +4,23 @@
 
 use std::collections::BTreeSet;
 
+use crate::analyzers::iocs::{effective_scope, ioc_kind_for};
 use crate::deadline::Deadline;
 use crate::error::AnalysisError;
-use crate::report::{Confidence, Evidence, ExtractedString, Finding, StringsFacts};
+use crate::report::{Confidence, Evidence, ExtractedString, Finding, IocFacts, StringsFacts};
 use crate::rules::{ApiGroup, ApiPattern, ApiRuleSet, StringCondition, When};
 
 /// String evidence items attached per finding.
 const MAX_STRING_EVIDENCE: usize = 5;
+
+/// The text a rule's `strings` condition can see.
+#[derive(Debug, Clone, Copy)]
+pub struct TextView<'s> {
+    /// All extracted strings.
+    pub strings: &'s StringsFacts,
+    /// IOCs from those strings (network kinds are judged on these).
+    pub iocs: &'s IocFacts,
+}
 
 /// The symbols a rule can see.
 #[derive(Debug, Clone, Default)]
@@ -39,10 +49,10 @@ pub fn evaluate<'s>(
     primary: &SymbolView<'_>,
     extended: Option<&SymbolView<'_>>,
     deadline: &Deadline,
-    strings: &mut dyn FnMut() -> Result<&'s StringsFacts, AnalysisError>,
+    strings: &mut dyn FnMut() -> Result<TextView<'s>, AnalysisError>,
 ) -> Result<(Vec<Finding>, Option<AnalysisError>), AnalysisError> {
-    let mut cache: Option<Result<&'s StringsFacts, AnalysisError>> = None;
-    let mut fetch = |cache: &mut Option<Result<&'s StringsFacts, AnalysisError>>| {
+    let mut cache: Option<Result<TextView<'s>, AnalysisError>> = None;
+    let mut fetch = |cache: &mut Option<Result<TextView<'s>, AnalysisError>>| {
         cache.get_or_insert_with(&mut *strings).clone()
     };
     let mut findings = Vec::new();
@@ -125,11 +135,28 @@ fn match_symbols(when: &When, view: &SymbolView<'_>) -> Option<Vec<Evidence>> {
 }
 
 /// String evidence if at least `min_distinct` different kinds/substrings hit.
-pub fn match_strings(cond: &StringCondition, strings: &StringsFacts) -> Option<Vec<Evidence>> {
+///
+/// Network kinds (URL, domain, IP, email) count only through IOCs that are
+/// not allowlisted and, for IPs and IP-host URLs, in `cond.ip_scopes`.
+pub fn match_strings(cond: &StringCondition, text: TextView<'_>) -> Option<Vec<Evidence>> {
+    let strings = text.strings;
     let mut hits: Vec<&ExtractedString> = Vec::new();
     let mut distinct = 0usize;
     for kind in &cond.kinds {
-        if let Some(s) = strings.items.iter().find(|s| s.kinds.contains(kind)) {
+        let hit = match ioc_kind_for(*kind) {
+            Some(ik) => text
+                .iocs
+                .items
+                .iter()
+                .filter(|i| i.kind == ik && !i.allowlisted)
+                .filter(|i| effective_scope(i).is_none_or(|s| cond.ip_scopes.contains(&s)))
+                .find_map(|i| {
+                    let at = *i.offsets.first()?;
+                    strings.items.iter().find(|s| s.offset == at)
+                }),
+            None => strings.items.iter().find(|s| s.kinds.contains(kind)),
+        };
+        if let Some(s) = hit {
             distinct += 1;
             hits.push(s);
         }

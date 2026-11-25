@@ -48,10 +48,12 @@ pub struct Cli {
     #[arg(long, value_enum, value_name = "LEVEL", default_value_t = MinSeverity::Info)]
     pub min_severity: MinSeverity,
 
-    /// Replace the bundled API behavior rules with this TOML file
-    /// (same format as rules/api_groups.toml).
-    #[arg(long, value_name = "FILE")]
-    pub api_rules: Option<PathBuf>,
+    /// Directory with your own rules, layered over the bundled ones. Known files:
+    /// api_groups.toml, elf_api_groups.toml, packers.toml (replace the bundled
+    /// ones unless they set include_defaults = true) and ioc_allowlist.toml
+    /// (always added). Missing files fall back to the bundled rules.
+    #[arg(long, value_name = "DIR")]
+    pub rules_dir: Option<PathBuf>,
 
     /// Hard time limit per file, in seconds (must be > 0). When it expires the
     /// remaining analyzers are skipped and the report is marked partial.

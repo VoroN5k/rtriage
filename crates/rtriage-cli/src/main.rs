@@ -13,7 +13,7 @@ use std::process::ExitCode;
 use anstream::{AutoStream, ColorChoice};
 use anyhow::Context;
 use clap::Parser;
-use rtriage_core::rules::ApiRuleSet;
+use rtriage_core::rules_dir::{RulesDir, KNOWN_FILES};
 use rtriage_core::{Config, Registry};
 use tracing::level_filters::LevelFilter;
 
@@ -91,26 +91,26 @@ fn build_config(cli: &Cli) -> anyhow::Result<Config> {
         config.limits.max_file_size = max;
     }
     config.limits.max_analysis_time = std::time::Duration::from_secs(cli.timeout.get());
-    if let Some(path) = &cli.api_rules {
-        config.api_rules = Some(std::sync::Arc::new(load_api_rules(path)?));
+    if let Some(dir) = &cli.rules_dir {
+        let rules = RulesDir::load(dir).context("cannot load rules")?;
+        if rules.loaded.is_empty() {
+            eprintln!(
+                "warning: {}: no known rules files ({}); using the bundled rules",
+                sanitize(&dir.to_string_lossy()),
+                KNOWN_FILES.join(", ")
+            );
+        }
+        for name in &rules.ignored {
+            eprintln!(
+                "warning: ignoring unknown rules file {} (known: {})",
+                sanitize(name),
+                KNOWN_FILES.join(", ")
+            );
+        }
+        tracing::info!(loaded = ?rules.loaded, "rules directory");
+        rules.apply(&mut config);
     }
     Ok(config)
-}
-
-/// Reads and validates a custom API rules file, refusing oversized files
-/// before reading them.
-fn load_api_rules(path: &Path) -> anyhow::Result<ApiRuleSet> {
-    let context = || format!("cannot load API rules {}", path.display());
-    let len = std::fs::metadata(path).with_context(context)?.len();
-    let limit = rtriage_core::rules::MAX_RULES_FILE_SIZE;
-    if usize::try_from(len).map_or(true, |l| l > limit) {
-        anyhow::bail!(
-            "{}: file is {len} bytes, over the {limit}-byte limit",
-            context()
-        );
-    }
-    let text = std::fs::read_to_string(path).with_context(context)?;
-    ApiRuleSet::parse(&text).with_context(context)
 }
 
 /// Loads and analyzes one file. Directories get a dedicated message.

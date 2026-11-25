@@ -14,7 +14,7 @@ use std::sync::LazyLock;
 
 use serde::Deserialize;
 
-use crate::report::{Category, Confidence, Severity, StringKind};
+use crate::report::{Category, Confidence, IpScope, Severity, StringKind};
 
 /// The rules shipped with rtriage.
 pub const BUNDLED_API_RULES: &str = include_str!("../../../rules/api_groups.toml");
@@ -77,6 +77,8 @@ pub enum RulesError {
 #[serde(deny_unknown_fields)]
 struct RawFile {
     schema_version: u32,
+    #[serde(default)]
+    include_defaults: bool,
     #[serde(default, rename = "group")]
     groups: Vec<RawGroup>,
 }
@@ -125,11 +127,16 @@ struct RawStrings {
     contains: Vec<String>,
     #[serde(default = "one")]
     min_distinct: usize,
+    #[serde(default)]
+    ip_scopes: Option<Vec<IpScope>>,
 }
 
 fn one() -> usize {
     1
 }
+
+/// IP scopes a string condition accepts unless it lists `ip_scopes`.
+pub const DEFAULT_IP_SCOPES: &[IpScope] = &[IpScope::Public];
 
 // ------------------------------------------------------------- validated
 
@@ -138,6 +145,9 @@ fn one() -> usize {
 pub struct ApiRuleSet {
     /// Groups in file order.
     pub groups: Vec<ApiGroup>,
+    /// `include_defaults = true` in the file: merge with the bundled rules
+    /// (see [`ApiRuleSet::merged_over`]) instead of replacing them.
+    pub include_defaults: bool,
 }
 
 /// One behavior group; becomes one finding when any [`When`] matches.
@@ -216,6 +226,9 @@ pub struct StringCondition {
     pub contains_lower: Vec<String>,
     /// Hits required.
     pub min_distinct: usize,
+    /// IP scopes that count for `ipv4` / `ipv6` / IP-host `url` kinds.
+    /// Default: only [`IpScope::Public`].
+    pub ip_scopes: Vec<IpScope>,
 }
 
 /// An API name pattern: exact, or prefix (trailing `*`).
@@ -298,7 +311,35 @@ impl ApiRuleSet {
             }
             groups.push(validate_group(g, target)?);
         }
-        Ok(Self { groups })
+        Ok(Self {
+            groups,
+            include_defaults: raw.include_defaults,
+        })
+    }
+
+    /// `self` layered over `defaults`: a group with the same ID replaces the
+    /// default one in place, new groups are appended. The merged set obeys the
+    /// same [`MAX_GROUPS`] limit as a single file.
+    ///
+    /// # Errors
+    /// [`RulesError::TooManyGroups`] if the merged set is too large.
+    pub fn merged_over(self, defaults: &ApiRuleSet) -> Result<ApiRuleSet, RulesError> {
+        let mut groups = defaults.groups.clone();
+        for g in self.groups {
+            match groups.iter_mut().find(|d| d.id == g.id) {
+                Some(slot) => *slot = g,
+                None => groups.push(g),
+            }
+        }
+        if groups.len() > MAX_GROUPS {
+            return Err(RulesError::TooManyGroups {
+                count: groups.len(),
+            });
+        }
+        Ok(ApiRuleSet {
+            groups,
+            include_defaults: false,
+        })
     }
 }
 
@@ -413,10 +454,36 @@ fn validate_strings(id: &str, s: RawStrings) -> Result<StringCondition, RulesErr
     if s.contains.iter().any(|c| c.is_empty()) {
         return Err(invalid(id, "empty substring in `contains`"));
     }
+    let ip_scopes = match s.ip_scopes {
+        None => DEFAULT_IP_SCOPES.to_vec(),
+        Some(scopes) => {
+            let ip_kind = s
+                .kinds
+                .iter()
+                .any(|k| matches!(k, StringKind::Ipv4 | StringKind::Ipv6 | StringKind::Url));
+            if !ip_kind {
+                return Err(invalid(
+                    id,
+                    "`ip_scopes` only applies with an ipv4, ipv6 or url kind",
+                ));
+            }
+            if scopes.is_empty() {
+                return Err(invalid(id, "`ip_scopes` must not be empty"));
+            }
+            let mut v: Vec<IpScope> = Vec::new();
+            for sc in scopes {
+                if !v.contains(&sc) {
+                    v.push(sc);
+                }
+            }
+            v
+        }
+    };
     Ok(StringCondition {
         kinds: s.kinds,
         contains_lower: s.contains.iter().map(|c| c.to_lowercase()).collect(),
         min_distinct: s.min_distinct,
+        ip_scopes,
     })
 }
 
@@ -597,6 +664,34 @@ slots = [["Foo", "Bar*"]]
     }
 
     #[test]
+    fn ip_scopes_default_to_public_and_are_validated() {
+        let with = |strings: &str| {
+            MINIMAL.replace(
+                "slots = [[\"Foo\", \"Bar*\"]]",
+                &format!("slots = [[\"Foo\"]]\nstrings = {strings}"),
+            )
+        };
+        let w = |t: &str| ApiRuleSet::parse(t).map(|r| r.groups[0].whens[0].clone());
+        let default = w(&with("{ kinds = [\"ipv4\"] }")).unwrap();
+        assert_eq!(default.strings.unwrap().ip_scopes, [IpScope::Public]);
+        let custom = w(&with(
+            "{ kinds = [\"url\"], ip_scopes = [\"private\", \"loopback\", \"private\"] }",
+        ))
+        .unwrap();
+        assert_eq!(
+            custom.strings.unwrap().ip_scopes,
+            [IpScope::Private, IpScope::Loopback]
+        );
+        // Only meaningful with IP-bearing kinds; never empty; names are checked.
+        assert!(w(&with(
+            "{ kinds = [\"file_path\"], ip_scopes = [\"private\"] }"
+        ))
+        .is_err());
+        assert!(w(&with("{ kinds = [\"ipv4\"], ip_scopes = [] }")).is_err());
+        assert!(w(&with("{ kinds = [\"ipv4\"], ip_scopes = [\"intranet\"] }")).is_err());
+    }
+
+    #[test]
     fn exports_are_elf_only() {
         let pe = MINIMAL.replace("slots = [[\"Foo\", \"Bar*\"]]", "exports = [\"readdir\"]");
         assert!(matches!(
@@ -689,6 +784,8 @@ pub const EXPLAINABLE_IDS: &[&str] = &[
     "ELF-SEGMENT-RWX",
     "ELF-SEGMENT-HIGH-ENTROPY",
     "ELF-PACKED-LIKELY",
+    "ELF-HARDENING-NO-PIE",
+    "ELF-HARDENING-NO-RELRO",
 ];
 
 /// Finding IDs a **runtime** may explain: only small hardening/import
@@ -706,6 +803,8 @@ pub const MIN_CONFIRM_INDICATORS: usize = 2;
 #[serde(deny_unknown_fields)]
 struct RawPackerFile {
     schema_version: u32,
+    #[serde(default)]
+    include_defaults: bool,
     #[serde(default, rename = "packer")]
     packers: Vec<RawPacker>,
     #[serde(default, rename = "runtime")]
@@ -760,6 +859,8 @@ pub struct PackerRuleSet {
     pub packers: Vec<PackerRule>,
     /// One entry per runtime.
     pub runtimes: Vec<RuntimeRule>,
+    /// `include_defaults = true` in the file: merge with the bundled rules.
+    pub include_defaults: bool,
 }
 
 /// What a confirmed packer explains.
@@ -799,6 +900,7 @@ impl PackerRuleSet {
         Self {
             packers: Vec::new(),
             runtimes: Vec::new(),
+            include_defaults: false,
         }
     }
 
@@ -907,7 +1009,46 @@ impl PackerRuleSet {
                 explains,
             });
         }
-        Ok(Self { packers, runtimes })
+        Ok(Self {
+            packers,
+            runtimes,
+            include_defaults: raw.include_defaults,
+        })
+    }
+
+    /// `self` layered over `defaults`: a packer (same name and format) or
+    /// runtime (same name) replaces the default entry, new ones are appended.
+    ///
+    /// # Errors
+    /// [`RulesError::TooManyGroups`] if the merged set is too large.
+    pub fn merged_over(self, defaults: &PackerRuleSet) -> Result<PackerRuleSet, RulesError> {
+        let mut packers = defaults.packers.clone();
+        for p in self.packers {
+            match packers
+                .iter_mut()
+                .find(|d| d.name == p.name && d.format == p.format)
+            {
+                Some(slot) => *slot = p,
+                None => packers.push(p),
+            }
+        }
+        let mut runtimes = defaults.runtimes.clone();
+        for rt in self.runtimes {
+            match runtimes.iter_mut().find(|d| d.name == rt.name) {
+                Some(slot) => *slot = rt,
+                None => runtimes.push(rt),
+            }
+        }
+        if packers.len() + runtimes.len() > MAX_GROUPS {
+            return Err(RulesError::TooManyGroups {
+                count: packers.len() + runtimes.len(),
+            });
+        }
+        Ok(PackerRuleSet {
+            packers,
+            runtimes,
+            include_defaults: false,
+        })
     }
 }
 

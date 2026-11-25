@@ -41,6 +41,7 @@ pub struct AnalysisContext<'a> {
     /// analyzers of one file agree on "now".
     pub now: SystemTime,
     strings: OnceLock<Result<StringsFacts, AnalysisError>>,
+    iocs: OnceLock<Result<crate::report::IocFacts, AnalysisError>>,
     pe: OnceLock<Result<pe::PeImage, AnalysisError>>,
     pe_imports: OnceLock<Option<pe::imports::ParsedImports>>,
     elf: OnceLock<Result<elf::ElfImage, AnalysisError>>,
@@ -56,6 +57,7 @@ impl<'a> AnalysisContext<'a> {
             deadline,
             now: SystemTime::now(),
             strings: OnceLock::new(),
+            iocs: OnceLock::new(),
             pe: OnceLock::new(),
             pe_imports: OnceLock::new(),
             elf: OnceLock::new(),
@@ -147,6 +149,29 @@ impl<'a> AnalysisContext<'a> {
     pub fn strings(&self) -> Result<&StringsFacts, AnalysisError> {
         self.strings
             .get_or_init(|| strings::extract_classified(self.input, self.config, &self.deadline))
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+
+    /// IOCs extracted from [AnalysisContext::strings], with scope and
+    /// allowlisting applied. Shared by the IOC analyzer and the behavior
+    /// rules (which only count non-allowlisted IOCs in allowed IP scopes).
+    ///
+    /// # Errors
+    /// Whatever [AnalysisContext::strings] reports, the deadline, or
+    /// [AnalysisError::Internal] if the bundled allowlist is broken.
+    pub fn iocs(&self) -> Result<&crate::report::IocFacts, AnalysisError> {
+        self.iocs
+            .get_or_init(|| {
+                let strings = self.strings()?;
+                let allow: &iocs::IocAllowlist = match &self.config.ioc_allowlist {
+                    Some(custom) => custom,
+                    None => iocs::IocAllowlist::bundled().map_err(|e| AnalysisError::Internal {
+                        reason: format!("bundled IOC allowlist is invalid: {e}"),
+                    })?,
+                };
+                iocs::extract(strings, allow, self.config.limits.max_iocs, &self.deadline)
+            })
             .as_ref()
             .map_err(Clone::clone)
     }

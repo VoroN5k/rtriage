@@ -5,7 +5,7 @@
 //! Imports and strings come from [`AnalysisContext`], computed once and shared,
 //! so this analyzer does not depend on the imports or strings analyzers.
 
-use crate::analyzers::rule_engine::{self, SymbolView};
+use crate::analyzers::rule_engine::{self, SymbolView, TextView};
 use crate::analyzers::{AnalysisContext, Analyzer};
 use crate::error::AnalysisError;
 use crate::report::{Format, ReportBuilder};
@@ -43,7 +43,12 @@ impl Analyzer for PeApiGroupsAnalyzer {
             import_count: imports.total_functions(),
         };
         let (findings, strings_error) =
-            rule_engine::evaluate(rules, &view, None, &ctx.deadline, &mut || ctx.strings())?;
+            rule_engine::evaluate(rules, &view, None, &ctx.deadline, &mut || {
+                Ok(TextView {
+                    strings: ctx.strings()?,
+                    iocs: ctx.iocs()?,
+                })
+            })?;
         for f in findings {
             out.push_finding(f);
         }
@@ -260,6 +265,67 @@ mod tests {
     fn winhttp_without_endpoint_is_not_network() {
         let r = run(pe(&[("WINHTTP.dll", &["WinHttpOpen"])], &["User settings"]));
         assert!(!has(&r, "PE-API-NETWORK"));
+    }
+
+    #[test]
+    fn non_public_and_allowlisted_endpoints_are_not_network() {
+        const WINHTTP: &[(&str, &[&str])] = &[("WINHTTP.dll", &["WinHttpOpen", "WinHttpConnect"])];
+        for s in [
+            "http://127.0.0.1:8080/status",
+            "connect 192.168.1.20",
+            "10.0.0.5",
+            "198.51.100.7",
+            "http://[::1]/",
+            "http://schemas.microsoft.com/SMI/2005/WindowsSettings",
+            "http://crl.digicert.com/root.crl",
+        ] {
+            let r = run(pe(WINHTTP, &[s]));
+            assert!(!has(&r, "PE-API-NETWORK"), "{s}");
+        }
+    }
+
+    #[test]
+    fn version_strings_are_not_endpoints() {
+        const WINHTTP: &[(&str, &[&str])] = &[("WINHTTP.dll", &["WinHttpOpen", "WinHttpConnect"])];
+        for s in [
+            "10.0.19041.1",
+            "6.1.7601.17514",
+            "FileVersion 1.0.0.1",
+            "ProductVersion: 5.2.3.4",
+        ] {
+            let r = run(pe(WINHTTP, &[s]));
+            assert!(!has(&r, "PE-API-NETWORK"), "{s}");
+            assert!(r.facts.iocs.as_ref().unwrap().items.is_empty(), "{s}");
+        }
+    }
+
+    #[test]
+    fn ip_scopes_widen_a_custom_rule() {
+        let rules = ApiRuleSet::parse(
+            r#"schema_version = 1
+[[group]]
+id = "PE-API-LAN"
+title = "LAN client"
+rationale = "test"
+severity = "low"
+confidence = "low"
+category = "network"
+[[group.when]]
+slots = [["WinHttpConnect"]]
+strings = { kinds = ["ipv4"], ip_scopes = ["private"] }
+"#,
+        )
+        .unwrap();
+        let config = Config {
+            api_rules: Some(Arc::new(rules)),
+            ..Config::default()
+        };
+        let input =
+            |s: &str| Input::from_bytes("t.exe", pe(&[("WINHTTP.dll", &["WinHttpConnect"])], &[s]));
+        let lan = Registry::default().analyze(&input("192.168.1.20"), &config);
+        assert!(lan.findings.iter().any(|f| f.id == "PE-API-LAN"));
+        let public = Registry::default().analyze(&input("45.13.227.8"), &config);
+        assert!(!public.findings.iter().any(|f| f.id == "PE-API-LAN"));
     }
 
     #[test]

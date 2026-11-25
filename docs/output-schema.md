@@ -2,12 +2,29 @@
 
 `rtriage -f json` writes one JSON document per invocation.
 
-**Versioning.** `schema_version` is an integer. It is bumped only on breaking
-changes: removing or renaming a field, or changing a field's type or meaning.
-Adding fields or enum values is *not* breaking. Consumers should ignore
-unknown fields and treat unknown enum values gracefully.
+**Versioning.** `schema_version` is an integer.
 
-Current version: **1**.
+| Change | Before the first release | After a release |
+|---|---|---|
+| Add a field, object member or enum value | no bump | no bump |
+| Change the shape of an existing field (rename, remove, change type, restructure an object, change meaning) | no bump | **bump** (`1` → `2`, ...) |
+
+- **Before the first release** nobody can depend on version 1, so it stays
+  `1` while the schema settles. Every shape change made in that period is
+  listed below so it is still traceable.
+- **After a release**, a shape change always bumps the version, even for a
+  single field, and is listed in the changelog. Adding things never does.
+- Consumers should ignore unknown fields and treat unknown enum values
+  gracefully; that is what keeps additions non-breaking.
+
+Current version: **1** (unreleased).
+
+Pre-release shape changes within version 1:
+
+- `findings[].suppressed`: `{ by, packer }` became `{ kind, name, by }` (M3,
+  when runtimes became explainers). `risk.breakdown[].reduced_by` for
+  suppressions: `{ kind: "suppressed", by, packer }` became
+  `{ kind: "suppressed", explainer, name, by }`.
 
 ## Top level
 
