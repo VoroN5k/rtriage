@@ -70,6 +70,14 @@ pub enum AnalysisError {
         max: u64,
     },
 
+    /// A bug in rtriage itself (e.g. a built-in pattern failed to compile).
+    /// Never caused by the input file.
+    #[error("internal error: {reason}")]
+    Internal {
+        /// What went wrong.
+        reason: String,
+    },
+
     /// A structure is present but internally inconsistent.
     #[error("malformed {what}: {reason}")]
     Malformed {

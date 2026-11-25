@@ -81,6 +81,39 @@ pub struct ExtractedString {
     pub value: String,
     /// `true` if `value` was cut short.
     pub truncated: bool,
+    /// What the string looks like (URL, IP, path, ...); sorted, may be empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub kinds: Vec<StringKind>,
+}
+
+/// Classification of an extracted string. A string can have several kinds
+/// (a URL also contains a domain). Pattern-based, so treat as hints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum StringKind {
+    /// `http(s)://`, `ftp://`, `ws(s)://` URL.
+    Url,
+    /// Dotted-quad IPv4 address.
+    Ipv4,
+    /// IPv6 address.
+    Ipv6,
+    /// Domain name with a known TLD.
+    Domain,
+    /// Email address.
+    Email,
+    /// Windows, UNC, environment-variable or Unix system path.
+    FilePath,
+    /// Windows registry key.
+    RegistryKey,
+    /// Long base64-looking blob.
+    Base64,
+    /// Shell command often abused by malware (e.g. `vssadmin delete shadows`).
+    SuspiciousCommand,
+    /// Bitcoin / Ethereum / Monero-like address.
+    CryptoWallet,
+    /// HTTP user-agent string.
+    UserAgent,
 }
 
 /// Shannon entropy summary of the whole file.

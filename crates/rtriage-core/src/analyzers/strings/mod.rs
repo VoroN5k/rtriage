@@ -12,6 +12,8 @@
 //! of `A` costs one bounded allocation. At most `max_strings` strings are kept;
 //! the rest are only counted.
 
+pub mod classify;
+
 use super::{AnalysisContext, Analyzer};
 use crate::error::AnalysisError;
 use crate::report::{ExtractedString, Format, ReportBuilder, StringEncoding, StringsFacts};
@@ -35,8 +37,21 @@ impl Analyzer for StringsAnalyzer {
             max_len: ctx.config.limits.max_string_len,
             max_items: ctx.config.limits.max_strings,
         };
-        out.facts.strings = Some(extract(&ctx.input.data, opts));
-        Ok(())
+        let mut facts = extract(&ctx.input.data, opts);
+        // Extraction results are kept even if classification is unavailable.
+        let result = match classify::classifier() {
+            Ok(c) => {
+                for s in &mut facts.items {
+                    s.kinds = c.classify(&s.value);
+                }
+                Ok(())
+            }
+            Err(e) => Err(AnalysisError::Internal {
+                reason: format!("string classifier failed to build: {e}"),
+            }),
+        };
+        out.facts.strings = Some(facts);
+        result
     }
 }
 
@@ -107,6 +122,7 @@ impl Collector {
             len: to_u64(len),
             value,
             truncated: len > self.opts.max_len,
+            kinds: Vec::new(),
         });
     }
 
@@ -346,5 +362,25 @@ mod tests {
         let s = report.facts.strings.unwrap();
         assert_eq!(s.min_len, 3);
         assert_eq!(s.total, 2);
+    }
+
+    #[test]
+    fn analyzer_classifies_strings() {
+        // 0xff separator: without it ('e', 0x00) would glue onto the UTF-16 run.
+        let mut data = b"\x00http://c2.evil.ru/gate\xff\xff".to_vec();
+        data.extend(utf16(r"Software\Microsoft\Windows\CurrentVersion\Run"));
+        let input = Input::from_bytes("c.bin", data);
+        let report = Registry::default().analyze(&input, &Config::default());
+        assert!(report.errors.is_empty());
+        let kinds: Vec<_> = report
+            .facts
+            .strings
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|s| s.kinds)
+            .collect();
+        use crate::report::StringKind::*;
+        assert_eq!(kinds, [vec![Url, Domain], vec![RegistryKey]]);
     }
 }
