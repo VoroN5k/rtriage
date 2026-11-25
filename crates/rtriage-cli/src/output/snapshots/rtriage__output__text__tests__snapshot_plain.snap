@@ -1,0 +1,31 @@
+---
+source: crates/rtriage-cli/src/output/text.rs
+expression: "render_string(&sample(false), PLAIN)"
+---
+sample.bin
+  Type     unknown                    Size  12 383 bytes (12.1 KiB)
+  MD5      a591a28541051596d71dedd45c2dd382
+  SHA-1    a91387c84dc11466737cc3e1e97f1c2e60c0e60d
+  SHA-256  632434ea68a1d4895c9351ae89074b81bd073706f4edf8681db6fd6d3a4f7aad
+  Risk     [CLEAN-LOOKING] score 0
+
+Findings
+  [HIGH] TEST-FINDING  Example finding  (confidence: high, injection)
+      Shown to check the layout.
+      - section #1 ".text"
+      - entropy = 7.912
+      ATT&CK: T1055
+
+Entropy
+  Whole file  6.243 bits/byte
+  High-entropy regions (>= 7.20, window 4096):
+    0x00000000..0x00002000     8.0 KiB  7.999
+
+Strings  35 found (ASCII + UTF-16LE, min 5), 2 classified
+  url                0x00000002  A  http://c2.example.ru/gate.php
+  registry_key       0x00000021  A  Software\Microsoft\Windows\CurrentVersion\Run
+
+------------------------------------------------------------------------
+
+Failed
+  missing.bin: cannot read missing.bin: not found

@@ -16,7 +16,7 @@ pub struct Cli {
     pub files: Vec<PathBuf>,
 
     /// Output format.
-    #[arg(short = 'f', long, value_enum, default_value_t = OutputFormat::Json)]
+    #[arg(short = 'f', long, value_enum, default_value_t = OutputFormat::Text)]
     pub format: OutputFormat,
 
     /// Write the report to PATH instead of stdout.
@@ -51,6 +51,8 @@ pub struct Cli {
 /// Report output format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum OutputFormat {
+    /// Human-readable report.
+    Text,
     /// Versioned JSON (see docs/output-schema.md).
     Json,
 }
@@ -75,7 +77,7 @@ mod tests {
     #[test]
     fn defaults() {
         let cli = Cli::try_parse_from(["rtriage", "a.exe"]).unwrap();
-        assert_eq!(cli.format, OutputFormat::Json);
+        assert_eq!(cli.format, OutputFormat::Text);
         assert_eq!(cli.strings_min.get(), 5);
         assert!(!cli.all_strings);
         assert_eq!(cli.max_size, None);

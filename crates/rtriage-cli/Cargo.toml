@@ -12,6 +12,8 @@ name = "rtriage"
 path = "src/main.rs"
 
 [dependencies]
+anstream = "1.0.0"
+anstyle = "1.0.14"
 anyhow = "1.0.105"
 clap = { version = "4.6.10", features = ["derive"] }
 rtriage-core = { path = "../rtriage-core" }

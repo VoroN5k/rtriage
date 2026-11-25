@@ -1,6 +1,7 @@
 //! Report renderers.
 
 pub mod json;
+pub mod text;
 
 use rtriage_core::Report;
 use serde::Serialize;

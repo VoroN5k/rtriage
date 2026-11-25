@@ -10,12 +10,14 @@ use std::io::{self, BufWriter, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
+use anstream::{AutoStream, ColorChoice};
 use anyhow::Context;
 use clap::Parser;
 use rtriage_core::{Config, Registry};
 use tracing::level_filters::LevelFilter;
 
 use crate::cli::{Cli, OutputFormat};
+use crate::output::text::TextOptions;
 use crate::output::{Failure, Run};
 use crate::sanitize::sanitize;
 
@@ -103,19 +105,41 @@ fn triage(
 }
 
 fn write_output(cli: &Cli, run: &Run) -> anyhow::Result<()> {
-    let mut out: Box<dyn Write> = match &cli.output {
+    match &cli.output {
+        // Files never get ANSI styles.
         Some(path) => {
-            Box::new(BufWriter::new(File::create(path).with_context(|| {
-                format!("cannot create output file {}", path.display())
-            })?))
+            let file = File::create(path)
+                .with_context(|| format!("cannot create output file {}", path.display()))?;
+            let mut out = BufWriter::new(file);
+            render(cli, run, &mut out, false).and_then(|()| out.flush())
         }
-        None => Box::new(io::stdout().lock()),
-    };
-    match cli.format {
-        OutputFormat::Json => output::json::render(run, &mut *out),
+        None => {
+            // AutoStream strips styles when stdout is not a terminal or NO_COLOR
+            // is set, and enables ANSI support on legacy Windows consoles.
+            let choice = if cli.color_allowed() {
+                ColorChoice::Auto
+            } else {
+                ColorChoice::Never
+            };
+            let mut out = AutoStream::new(io::stdout().lock(), choice);
+            render(cli, run, &mut out, true).and_then(|()| out.flush())
+        }
     }
-    .and_then(|()| out.flush())
     .context("cannot write report")
+}
+
+fn render(cli: &Cli, run: &Run, out: &mut dyn Write, color: bool) -> io::Result<()> {
+    match cli.format {
+        OutputFormat::Text => output::text::render(
+            run,
+            out,
+            TextOptions {
+                color,
+                all_strings: cli.all_strings,
+            },
+        ),
+        OutputFormat::Json => output::json::render(run, out),
+    }
 }
 
 fn init_logging(cli: &Cli) {
