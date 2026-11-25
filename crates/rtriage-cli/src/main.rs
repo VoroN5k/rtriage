@@ -80,6 +80,7 @@ fn build_config(cli: &Cli) -> Config {
     if let Some(max) = cli.max_size {
         config.limits.max_file_size = max;
     }
+    config.limits.max_analysis_time = std::time::Duration::from_secs(cli.timeout.get());
     config
 }
 

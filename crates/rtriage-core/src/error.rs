@@ -70,6 +70,13 @@ pub enum AnalysisError {
         max: u64,
     },
 
+    /// The per-file time limit expired before this analyzer finished (or started).
+    #[error("analysis time limit of {limit_ms} ms exceeded")]
+    Timeout {
+        /// Configured limit in milliseconds.
+        limit_ms: u64,
+    },
+
     /// A bug in rtriage itself (e.g. a built-in pattern failed to compile).
     /// Never caused by the input file.
     #[error("internal error: {reason}")]

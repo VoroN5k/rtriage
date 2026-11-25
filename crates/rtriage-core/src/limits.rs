@@ -7,6 +7,8 @@
 
 use serde::Serialize;
 
+use std::time::Duration;
+
 use crate::error::AnalysisError;
 
 /// Configurable resource limits. [`Limits::default`] gives the documented defaults.
@@ -27,11 +29,19 @@ pub struct Limits {
     pub max_strings: usize,
     /// Strings longer than this are truncated, in characters. Default: 4096.
     pub max_string_len: usize,
+    /// Hard wall-clock limit for analysing one file. Default: 30 s.
+    /// Enforced cooperatively (see [`crate::deadline`]).
+    pub max_analysis_time: Duration,
+    /// Max loop steps per format parser over attacker-controlled structures
+    /// (import thunks, TLS callbacks, ...). Default: 10 000 000.
+    pub max_parser_steps: u64,
 }
 
 impl Limits {
     /// Default for [`Limits::max_file_size`]: 512 MiB.
     pub const DEFAULT_MAX_FILE_SIZE: u64 = 512 * 1024 * 1024;
+    /// Default for [`Limits::max_analysis_time`]: 30 s.
+    pub const DEFAULT_MAX_ANALYSIS_TIME: Duration = Duration::from_secs(30);
 
     /// Returns `Ok(())` if `value <= max`, otherwise a [`AnalysisError::LimitExceeded`]
     /// naming `limit`.
@@ -54,6 +64,8 @@ impl Default for Limits {
             max_exports: 65_536,
             max_strings: 200_000,
             max_string_len: 4096,
+            max_analysis_time: Self::DEFAULT_MAX_ANALYSIS_TIME,
+            max_parser_steps: 10_000_000,
         }
     }
 }

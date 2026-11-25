@@ -11,8 +11,14 @@
 //! is left to format-aware analyzers, which know where sections and resources are.
 
 use super::{AnalysisContext, Analyzer};
+use crate::deadline::Deadline;
 use crate::error::AnalysisError;
 use crate::report::{EntropyFacts, EntropyRegion, Format, ReportBuilder};
+
+/// Bytes hashed into the histogram between deadline checks.
+const DEADLINE_CHUNK: usize = 1 << 20;
+/// Windows evaluated between deadline checks.
+const WINDOWS_PER_CHECK: usize = 256;
 
 /// Records [`EntropyFacts`] for every input, regardless of format.
 #[derive(Debug, Clone, Copy, Default)]
@@ -32,27 +38,50 @@ impl Analyzer for EntropyAnalyzer {
         let window = ctx.config.thresholds.entropy_window.get();
         let threshold = ctx.config.thresholds.entropy_high;
         out.facts.entropy = Some(EntropyFacts {
-            whole_file: shannon(data),
+            whole_file: shannon_bounded(data, &ctx.deadline)?,
             window: to_u64(window),
             high_threshold: threshold,
-            high_regions: high_regions(data, window, threshold),
+            high_regions: high_regions(data, window, threshold, &ctx.deadline)?,
         });
         Ok(())
     }
 }
 
 /// Shannon entropy of `data` in bits per byte, in `0.0..=8.0`. Empty input is `0.0`.
+///
+/// Unbounded single pass: use [`shannon_bounded`] for data of file size.
 pub fn shannon(data: &[u8]) -> f64 {
-    if data.is_empty() {
-        return 0.0;
-    }
     let mut counts = [0u64; 256];
+    count_bytes(data, &mut counts);
+    entropy_of(&counts, data.len())
+}
+
+/// [`shannon`] that checks `deadline` every MiB.
+///
+/// # Errors
+/// [`AnalysisError::Timeout`] if the deadline passes.
+pub fn shannon_bounded(data: &[u8], deadline: &Deadline) -> Result<f64, AnalysisError> {
+    let mut counts = [0u64; 256];
+    for chunk in data.chunks(DEADLINE_CHUNK) {
+        deadline.check()?;
+        count_bytes(chunk, &mut counts);
+    }
+    Ok(entropy_of(&counts, data.len()))
+}
+
+fn count_bytes(data: &[u8], counts: &mut [u64; 256]) {
     for &b in data {
         if let Some(c) = counts.get_mut(usize::from(b)) {
             *c += 1;
         }
     }
-    let len = data.len() as f64;
+}
+
+fn entropy_of(counts: &[u64; 256], total: usize) -> f64 {
+    if total == 0 {
+        return 0.0;
+    }
+    let len = total as f64;
     let h: f64 = counts
         .iter()
         .filter(|&&c| c > 0)
@@ -72,13 +101,21 @@ pub fn shannon(data: &[u8]) -> f64 {
 /// Merges consecutive full windows with entropy >= `threshold` into regions.
 ///
 /// `window` must be non-zero (guaranteed by `NonZeroUsize` in the config).
-fn high_regions(data: &[u8], window: usize, threshold: f64) -> Vec<EntropyRegion> {
+fn high_regions(
+    data: &[u8],
+    window: usize,
+    threshold: f64,
+    deadline: &Deadline,
+) -> Result<Vec<EntropyRegion>, AnalysisError> {
     if window == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut spans: Vec<(usize, usize)> = Vec::new();
     let mut offset = 0usize;
-    for chunk in data.chunks_exact(window) {
+    for (i, chunk) in data.chunks_exact(window).enumerate() {
+        if i % WINDOWS_PER_CHECK == 0 {
+            deadline.check()?;
+        }
         let end = offset.saturating_add(window);
         if shannon(chunk) >= threshold {
             match spans.last_mut() {
@@ -88,17 +125,18 @@ fn high_regions(data: &[u8], window: usize, threshold: f64) -> Vec<EntropyRegion
         }
         offset = end;
     }
-    spans
-        .into_iter()
-        .filter_map(|(start, end)| {
-            let bytes = data.get(start..end)?;
-            Some(EntropyRegion {
-                offset: to_u64(start),
-                len: to_u64(end - start),
-                entropy: shannon(bytes),
-            })
-        })
-        .collect()
+    let mut regions = Vec::with_capacity(spans.len());
+    for (start, end) in spans {
+        let Some(bytes) = data.get(start..end) else {
+            continue;
+        };
+        regions.push(EntropyRegion {
+            offset: to_u64(start),
+            len: to_u64(end - start),
+            entropy: shannon_bounded(bytes, deadline)?,
+        });
+    }
+    Ok(regions)
 }
 
 /// `usize` -> `u64`; lossless on all supported (<= 64-bit) targets.
@@ -123,6 +161,27 @@ mod tests {
 
     fn approx(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
+    }
+
+    /// Shadows the real `high_regions` for tests that don't care about deadlines.
+    fn high_regions(data: &[u8], window: usize, threshold: f64) -> Vec<EntropyRegion> {
+        super::high_regions(data, window, threshold, &Deadline::never()).unwrap()
+    }
+
+    #[test]
+    fn bounded_matches_unbounded() {
+        let data = uniform(3 * DEADLINE_CHUNK + 17);
+        let b = shannon_bounded(&data, &Deadline::never()).unwrap();
+        assert!(approx(b, shannon(&data)));
+    }
+
+    #[test]
+    fn expired_deadline_stops_entropy() {
+        assert!(matches!(
+            shannon_bounded(&[1, 2, 3], &Deadline::expired()),
+            Err(AnalysisError::Timeout { .. })
+        ));
+        assert!(super::high_regions(&uniform(W), W, HIGH, &Deadline::expired()).is_err());
     }
 
     #[test]

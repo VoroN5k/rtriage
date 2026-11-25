@@ -94,7 +94,10 @@ before displaying**), `truncated` (bool), `kinds` (array, omitted when empty).
 | Field | Type | Description |
 |---|---|---|
 | `analyzer` | string | Analyzer name, e.g. `strings`. |
-| `error.kind` | enum | `truncated` \| `limit_exceeded` \| `internal` \| `malformed`, plus kind-specific fields. |
+| `error.kind` | enum | `truncated` \| `limit_exceeded` \| `timeout` \| `internal` \| `malformed`, plus kind-specific fields. |
+
+`timeout` (with `limit_ms`) means the per-file time limit expired: the
+analyzer was interrupted or never started, and the report is partial.
 
 ## Exit codes
 

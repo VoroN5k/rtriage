@@ -13,6 +13,7 @@
 
 pub mod analyzers;
 pub mod config;
+pub mod deadline;
 pub mod error;
 pub mod input;
 pub mod limits;
@@ -20,6 +21,7 @@ pub mod report;
 
 pub use analyzers::{AnalysisContext, Analyzer, Registry};
 pub use config::{Config, Thresholds};
+pub use deadline::{Budget, Deadline};
 pub use error::{AnalysisError, Error};
 pub use input::{load, sniff_format, Input};
 pub use limits::Limits;

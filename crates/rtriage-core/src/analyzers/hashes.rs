@@ -8,8 +8,12 @@ use sha1::Sha1;
 use sha2::{Digest, Sha256};
 
 use super::{AnalysisContext, Analyzer};
+use crate::deadline::Deadline;
 use crate::error::AnalysisError;
 use crate::report::{Format, Hashes, ReportBuilder};
+
+/// Bytes hashed between deadline checks.
+const DEADLINE_CHUNK: usize = 1 << 20;
 
 /// Computes [`Hashes`] for every input, regardless of format.
 #[derive(Debug, Clone, Copy, Default)]
@@ -25,7 +29,7 @@ impl Analyzer for HashesAnalyzer {
     }
 
     fn run(&self, ctx: &AnalysisContext<'_>, out: &mut ReportBuilder) -> Result<(), AnalysisError> {
-        out.set_hashes(compute(&ctx.input.data));
+        out.set_hashes(compute_bounded(&ctx.input.data, &ctx.deadline)?);
         Ok(())
     }
 }
@@ -37,6 +41,25 @@ pub fn compute(data: &[u8]) -> Hashes {
         sha1: to_hex(&Sha1::digest(data)),
         sha256: to_hex(&Sha256::digest(data)),
     }
+}
+
+/// [`compute`] in one chunked pass, checking `deadline` every MiB.
+///
+/// # Errors
+/// [`AnalysisError::Timeout`] if the deadline passes.
+pub fn compute_bounded(data: &[u8], deadline: &Deadline) -> Result<Hashes, AnalysisError> {
+    let (mut md5, mut sha1, mut sha256) = (Md5::new(), Sha1::new(), Sha256::new());
+    for chunk in data.chunks(DEADLINE_CHUNK) {
+        deadline.check()?;
+        md5.update(chunk);
+        sha1.update(chunk);
+        sha256.update(chunk);
+    }
+    Ok(Hashes {
+        md5: to_hex(&md5.finalize()),
+        sha1: to_hex(&sha1.finalize()),
+        sha256: to_hex(&sha256.finalize()),
+    })
 }
 
 /// Lowercase hex encoding.
@@ -78,6 +101,23 @@ mod tests {
             h.sha256,
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[test]
+    fn chunked_matches_one_shot() {
+        let data: Vec<u8> = (0..(2 * DEADLINE_CHUNK + 123)).map(|i| i as u8).collect();
+        assert_eq!(
+            compute_bounded(&data, &Deadline::never()).unwrap(),
+            compute(&data)
+        );
+    }
+
+    #[test]
+    fn expired_deadline_stops_hashing() {
+        assert!(matches!(
+            compute_bounded(b"abc", &Deadline::expired()),
+            Err(AnalysisError::Timeout { .. })
+        ));
     }
 
     #[test]

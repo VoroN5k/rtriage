@@ -1,6 +1,6 @@
 //! Command-line arguments.
 
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
 
 use clap::{ArgAction, Parser, ValueEnum};
@@ -34,6 +34,11 @@ pub struct Cli {
     /// Maximum file size to analyze, in bytes [default: 536870912 (512 MiB)].
     #[arg(long, value_name = "BYTES")]
     pub max_size: Option<u64>,
+
+    /// Hard time limit per file, in seconds (must be > 0). When it expires the
+    /// remaining analyzers are skipped and the report is marked partial.
+    #[arg(long, value_name = "SECONDS", default_value = "30")]
+    pub timeout: NonZeroU64,
 
     /// Disable colored output (NO_COLOR is honored too).
     #[arg(long)]
@@ -81,6 +86,13 @@ mod tests {
         assert_eq!(cli.strings_min.get(), 5);
         assert!(!cli.all_strings);
         assert_eq!(cli.max_size, None);
+        assert_eq!(cli.timeout.get(), 30);
+    }
+
+    #[test]
+    fn rejects_zero_timeout() {
+        assert!(Cli::try_parse_from(["rtriage", "--timeout", "0", "a"]).is_err());
+        assert!(Cli::try_parse_from(["rtriage", "--timeout", "-1", "a"]).is_err());
     }
 
     #[test]

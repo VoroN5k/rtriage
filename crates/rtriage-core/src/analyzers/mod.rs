@@ -3,23 +3,59 @@
 //! Analyzers are independent and order-agnostic: each reads the input and
 //! writes facts/findings into a [`ReportBuilder`]. If one fails, the failure
 //! is recorded in the report and the remaining analyzers still run.
+//!
+//! Analyzers never read each other's output. Data several analyzers need
+//! (extracted strings, later the parsed PE) is computed lazily, once, inside
+//! [`AnalysisContext`].
 
 pub mod entropy;
 pub mod hashes;
 pub mod strings;
 
+use std::sync::OnceLock;
+
 use crate::config::Config;
+use crate::deadline::Deadline;
 use crate::error::AnalysisError;
 use crate::input::Input;
-use crate::report::{Format, Report, ReportBuilder, Risk};
+use crate::report::{Format, Report, ReportBuilder, Risk, StringsFacts};
 
-/// Read-only data shared by all analyzers for one file.
-#[derive(Debug, Clone, Copy)]
+/// Data shared by all analyzers for one file. Derived data is computed on
+/// first use and cached, so it is independent of analyzer order.
+#[derive(Debug)]
 pub struct AnalysisContext<'a> {
     /// The loaded file.
     pub input: &'a Input,
     /// Limits, thresholds and options for this run.
     pub config: &'a Config,
+    /// Wall-clock deadline for this file.
+    pub deadline: Deadline,
+    strings: OnceLock<Result<StringsFacts, AnalysisError>>,
+}
+
+impl<'a> AnalysisContext<'a> {
+    /// Creates a context; nothing is computed yet.
+    pub fn new(input: &'a Input, config: &'a Config, deadline: Deadline) -> Self {
+        Self {
+            input,
+            config,
+            deadline,
+            strings: OnceLock::new(),
+        }
+    }
+
+    /// Extracted and classified strings (all of them, up to `max_strings`).
+    /// Computed on first call; later calls return the cached result.
+    ///
+    /// # Errors
+    /// [`AnalysisError::Timeout`] if the deadline passed during extraction,
+    /// [`AnalysisError::Internal`] if the classifier is unavailable.
+    pub fn strings(&self) -> Result<&StringsFacts, AnalysisError> {
+        self.strings
+            .get_or_init(|| strings::extract_classified(self.input, self.config, &self.deadline))
+            .as_ref()
+            .map_err(Clone::clone)
+    }
 }
 
 /// One independent analysis pass.
@@ -81,12 +117,27 @@ impl Registry {
         self.analyzers.iter().map(|a| a.name())
     }
 
-    /// Runs every applicable analyzer on `input` and assembles the report.
+    /// Runs every applicable analyzer on `input` within
+    /// `config.limits.max_analysis_time` and assembles the report.
     pub fn analyze(&self, input: &Input, config: &Config) -> Report {
-        let ctx = AnalysisContext { input, config };
+        let deadline = Deadline::after(config.limits.max_analysis_time);
+        self.analyze_with_deadline(input, config, deadline)
+    }
+
+    /// Like [`Registry::analyze`] with an explicit deadline. Once it passes,
+    /// every remaining analyzer is recorded as timed out instead of running,
+    /// so the report stays valid but partial.
+    pub fn analyze_with_deadline(
+        &self,
+        input: &Input,
+        config: &Config,
+        deadline: Deadline,
+    ) -> Report {
+        let ctx = AnalysisContext::new(input, config, deadline);
         let mut out = ReportBuilder::new(input.file_info());
         for analyzer in self.analyzers.iter().filter(|a| a.applies_to(input.format)) {
-            if let Err(err) = analyzer.run(&ctx, &mut out) {
+            let result = deadline.check().and_then(|()| analyzer.run(&ctx, &mut out));
+            if let Err(err) = result {
                 out.push_error(analyzer.name(), err);
             }
         }
@@ -178,5 +229,55 @@ mod tests {
     #[test]
     fn default_registry_includes_hashes() {
         assert!(Registry::default().names().any(|n| n == "hashes"));
+    }
+
+    #[test]
+    fn expired_deadline_yields_valid_partial_report() {
+        let input = Input::from_bytes("x.bin", b"\x00http://a.example.com/\x00".to_vec());
+        let report = Registry::default().analyze_with_deadline(
+            &input,
+            &Config::default(),
+            Deadline::expired(),
+        );
+        let names: Vec<_> = report.errors.iter().map(|e| e.analyzer).collect();
+        assert_eq!(names, ["entropy", "hashes", "strings"]);
+        assert!(report
+            .errors
+            .iter()
+            .all(|e| matches!(e.error, AnalysisError::Timeout { .. })));
+        assert!(report.file.hashes.is_none());
+    }
+
+    /// Reads strings twice; both calls must return the same cached value.
+    struct ReadsStringsTwice;
+    impl Analyzer for ReadsStringsTwice {
+        fn name(&self) -> &'static str {
+            "reads-strings"
+        }
+        fn applies_to(&self, _: Format) -> bool {
+            true
+        }
+        fn run(
+            &self,
+            ctx: &AnalysisContext<'_>,
+            _: &mut ReportBuilder,
+        ) -> Result<(), AnalysisError> {
+            let a = ctx.strings()?;
+            let b = ctx.strings()?;
+            assert!(std::ptr::eq(a, b), "strings must be computed once");
+            assert_eq!(a.items.len(), 1);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn strings_are_computed_once_and_shared() {
+        let input = Input::from_bytes("x.bin", b"\x00http://a.example.com/\x00".to_vec());
+        let report = Registry::default()
+            .with(ReadsStringsTwice)
+            .analyze(&input, &Config::default());
+        assert!(report.errors.is_empty());
+        let strings = report.facts.strings.unwrap();
+        assert_eq!(strings.items[0].value, "http://a.example.com/");
     }
 }

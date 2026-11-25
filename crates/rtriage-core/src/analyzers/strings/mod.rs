@@ -15,12 +15,23 @@
 pub mod classify;
 
 use super::{AnalysisContext, Analyzer};
+use crate::config::Config;
+use crate::deadline::Deadline;
 use crate::error::AnalysisError;
+use crate::input::Input;
 use crate::report::{
     ExtractedString, Format, ReportBuilder, StringEncoding, StringsFacts, StringsIncluded,
 };
 
-/// Records [`StringsFacts`] for every input, regardless of format.
+/// Bytes (or UTF-16 units) scanned between deadline checks. Power of two.
+const DEADLINE_CHUNK: usize = 1 << 16;
+/// Strings classified between deadline checks.
+const CLASSIFY_CHUNK: usize = 1024;
+
+/// Publishes the context's shared [`StringsFacts`] into the report.
+///
+/// Extraction itself happens once in [`AnalysisContext::strings`], so other
+/// analyzers can use the same strings without depending on this one.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StringsAnalyzer;
 
@@ -34,27 +45,37 @@ impl Analyzer for StringsAnalyzer {
     }
 
     fn run(&self, ctx: &AnalysisContext<'_>, out: &mut ReportBuilder) -> Result<(), AnalysisError> {
-        let opts = Options {
-            min_len: ctx.config.strings_min_len.get(),
-            max_len: ctx.config.limits.max_string_len,
-            max_items: ctx.config.limits.max_strings,
-        };
-        let mut facts = extract(&ctx.input.data, opts);
-        // Extraction results are kept even if classification is unavailable.
-        let result = match classify::classifier() {
-            Ok(c) => {
-                for s in &mut facts.items {
-                    s.kinds = c.classify(&s.value);
-                }
-                Ok(())
-            }
-            Err(e) => Err(AnalysisError::Internal {
-                reason: format!("string classifier failed to build: {e}"),
-            }),
-        };
-        out.facts.strings = Some(facts);
-        result
+        out.facts.strings = Some(ctx.strings()?.clone());
+        Ok(())
     }
+}
+
+/// Extracts and classifies strings of `input` using `config`'s limits.
+///
+/// # Errors
+/// [`AnalysisError::Timeout`] if `deadline` passes, [`AnalysisError::Internal`]
+/// if a built-in classifier pattern failed to compile.
+pub fn extract_classified(
+    input: &Input,
+    config: &Config,
+    deadline: &Deadline,
+) -> Result<StringsFacts, AnalysisError> {
+    let opts = Options {
+        min_len: config.strings_min_len.get(),
+        max_len: config.limits.max_string_len,
+        max_items: config.limits.max_strings,
+    };
+    let mut facts = extract(&input.data, opts, deadline)?;
+    let classifier = classify::classifier().map_err(|e| AnalysisError::Internal {
+        reason: format!("string classifier failed to build: {e}"),
+    })?;
+    for chunk in facts.items.chunks_mut(CLASSIFY_CHUNK) {
+        deadline.check()?;
+        for s in chunk {
+            s.kinds = classifier.classify(&s.value);
+        }
+    }
+    Ok(facts)
 }
 
 /// Extraction parameters.
@@ -69,12 +90,19 @@ pub struct Options {
 }
 
 /// Extracts ASCII and UTF-16LE strings from `data`, sorted by offset.
-pub fn extract(data: &[u8], opts: Options) -> StringsFacts {
+///
+/// # Errors
+/// [`AnalysisError::Timeout`] if `deadline` passes during the scan.
+pub fn extract(
+    data: &[u8],
+    opts: Options,
+    deadline: &Deadline,
+) -> Result<StringsFacts, AnalysisError> {
     let mut c = Collector::new(opts);
-    scan_ascii(data, &mut c);
-    scan_utf16le(data, 0, &mut c);
-    scan_utf16le(data, 1, &mut c);
-    c.finish()
+    scan_ascii(data, &mut c, deadline)?;
+    scan_utf16le(data, 0, &mut c, deadline)?;
+    scan_utf16le(data, 1, &mut c, deadline)?;
+    Ok(c.finish())
 }
 
 /// Printable ASCII plus horizontal tab.
@@ -150,9 +178,12 @@ fn enc_rank(s: &ExtractedString) -> u8 {
     }
 }
 
-fn scan_ascii(data: &[u8], c: &mut Collector) {
+fn scan_ascii(data: &[u8], c: &mut Collector, deadline: &Deadline) -> Result<(), AnalysisError> {
     let mut start: Option<usize> = None;
     for (i, &b) in data.iter().enumerate() {
+        if i % DEADLINE_CHUNK == 0 {
+            deadline.check()?;
+        }
         match (is_printable(b), start) {
             (true, None) => start = Some(i),
             (false, Some(s)) => {
@@ -165,6 +196,7 @@ fn scan_ascii(data: &[u8], c: &mut Collector) {
     if let Some(s) = start {
         emit_ascii(data, s, data.len(), c);
     }
+    Ok(())
 }
 
 fn emit_ascii(data: &[u8], start: usize, end: usize, c: &mut Collector) {
@@ -178,12 +210,20 @@ fn emit_ascii(data: &[u8], start: usize, end: usize, c: &mut Collector) {
 }
 
 /// Scans 2-byte units starting at byte `align` (0 or 1).
-fn scan_utf16le(data: &[u8], align: usize, c: &mut Collector) {
+fn scan_utf16le(
+    data: &[u8],
+    align: usize,
+    c: &mut Collector,
+    deadline: &Deadline,
+) -> Result<(), AnalysisError> {
     let body = data.get(align..).unwrap_or_default();
     // Start index (in units) of the current run.
     let mut start: Option<usize> = None;
     let mut units = 0usize;
     for (k, unit) in body.chunks_exact(2).enumerate() {
+        if k % DEADLINE_CHUNK == 0 {
+            deadline.check()?;
+        }
         units = k + 1;
         let is_char = matches!(unit, [lo, 0] if is_printable(*lo));
         match (is_char, start) {
@@ -198,6 +238,7 @@ fn scan_utf16le(data: &[u8], align: usize, c: &mut Collector) {
     if let Some(s) = start {
         emit_utf16(body, align, s, units, c);
     }
+    Ok(())
 }
 
 /// Emits units `start..end` of `body` (which begins at file offset `align`).
@@ -227,6 +268,20 @@ mod tests {
     use crate::config::Config;
     use crate::input::Input;
     use crate::Registry;
+
+    /// Shadows the real `extract` for tests that don't care about deadlines.
+    fn extract(data: &[u8], opts: Options) -> StringsFacts {
+        super::extract(data, opts, &Deadline::never()).unwrap()
+    }
+
+    #[test]
+    fn expired_deadline_stops_extraction() {
+        let data = vec![b'A'; 3 * DEADLINE_CHUNK];
+        assert!(matches!(
+            super::extract(&data, OPTS, &Deadline::expired()),
+            Err(AnalysisError::Timeout { .. })
+        ));
+    }
 
     const OPTS: Options = Options {
         min_len: 5,
