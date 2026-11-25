@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/rtriage-core", "crates/rtriage-cli"]
+members = ["crates/rtriage-core", "crates/rtriage-cli", "crates/rtriage-fixtures"]
 
 [workspace.package]
 version = "0.1.0"
