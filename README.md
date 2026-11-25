@@ -16,3 +16,7 @@ cargo run -p rtriage-cli -- <file>
 ```
 
 **MSRV:** Rust 1.95 (pinned in `rust-toolchain.toml`).
+
+## License
+
+Licensed under the GNU General Public License v3.0 or later; see [LICENSE](LICENSE).
