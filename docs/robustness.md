@@ -19,6 +19,12 @@ analyzer. This document lists the defences and where they live.
 | `max_certificates` | 16 | `WIN_CERTIFICATE` entries; zero or oversized lengths stop the walk. |
 | `max_dynamic_entries` | 4096 | ELF `PT_DYNAMIC` entries (reading stops at `DT_NULL`). |
 | `max_symbols` | 200 000 | ELF symbols per table. Counts derived from `DT_HASH` / `DT_GNU_HASH` are capped here, and reading stops at EOF; `DT_GNU_HASH` bucket/bloom counts above 2^20 are ignored and chain walks consume budget steps. |
+| `max_notes` | 256 | ELF notes across all `PT_NOTE` segments; descriptors are cut to 1 KiB, and a note whose sizes run past its segment stops that segment. |
+| `max_strings` | 200 000 | Strings kept (the rest are only counted). |
+| `max_string_len` | 4096 | Characters copied per string. |
+| `max_iocs` | 10 000 | Distinct IOCs kept (8 offsets each). |
+| `max_analysis_time` | 30 s | Wall-clock limit per file (`--timeout`). |
+| `max_parser_steps` | 10 000 000 | Loop steps per format parser. |
 
 The Rich header search is limited to the first 4 KiB, whatever `e_lfanew`
 claims.
@@ -29,11 +35,8 @@ must be 32 / 56, and the table must lie inside the file *before* goblin
 parses it. Section headers are optional: a bad `e_shentsize`, an
 oversized count, a table past EOF or a bad `e_shstrndx` is recorded as a
 section problem instead of aborting. `PT_INTERP` is read up to 4096 bytes.
-| `max_exports` | 65 536 | Export entries. |
-| `max_strings` | 200 000 | Strings kept (the rest are only counted). |
-| `max_string_len` | 4096 | Characters copied per string. |
-| `max_analysis_time` | 30 s | Wall-clock limit per file (`--timeout`). |
-| `max_parser_steps` | 10 000 000 | Loop steps per format parser. |
+UPX signature and banner searches look only at the first and last 4 KiB /
+64 KiB; the Go build-info search checks the deadline every MiB.
 
 Exceeding a limit yields `AnalysisError::LimitExceeded`, never an allocation
 of the claimed size.
@@ -70,7 +73,27 @@ The CLI exposes `--timeout <SECONDS>` (default 30, `0` is rejected).
   default hook would echo a panic payload (possibly containing file data)
   to the terminal unescaped.
 
-## 4. Planned: process isolation for `rtriage scan` (M4)
+## 4. How this is tested
+
+- **Property tests** (stable, every push): `crates/rtriage-core/tests/robustness_pe.rs`
+  and `robustness_elf.rs`, sharing mutations and report invariants in
+  `tests/common`. Synthetic corpora (PE; ELF in both classes and byte
+  orders) are mutated with byte, dword and qword edge values in either byte
+  order and truncation, or followed by random bytes behind real headers.
+  Every report must be coherent (score = breakdown sum, sorted findings, API
+  groups never suppressed); a tiny `max_parser_steps` may only produce
+  budget errors reporting that limit; an expired deadline yields no
+  findings and only timeouts; 16 MiB of noise under a 1 ms deadline
+  finishes in seconds. Long run:
+  `PROPTEST_CASES=100000 cargo test -p rtriage-core --test robustness_elf --release`
+  (500 000 ELF cases passed when step 8 of M3 landed).
+- **Unit tests** for each bounded parser: huge header counts, oversized
+  note sizes, `max_notes`, budget and deadline on long note walks, GNU hash
+  chains without an end bit.
+- **Fuzzing** (nightly, weekly in CI): `pe_parse`, `elf_parse`, `strings`;
+  see `fuzz/README.md`.
+
+## 5. Planned: process isolation for `rtriage scan` (M4)
 
 In-process defences cannot stop everything: a stack overflow or an
 allocation failure aborts the whole process, and a hung third-party call

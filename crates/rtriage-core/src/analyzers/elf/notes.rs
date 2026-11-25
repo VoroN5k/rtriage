@@ -157,6 +157,52 @@ mod tests {
         assert_eq!(n.count, 0);
     }
 
+    /// glibc fixture whose `PT_NOTE` is pointed at `count` empty notes in the overlay.
+    fn many_notes(count: usize) -> (Vec<u8>, ElfImage) {
+        let mut blob = Vec::new();
+        for _ in 0..count {
+            blob.extend_from_slice(&[0u8; 12]); // namesz 0, descsz 0, type 0
+        }
+        let bytes = profiles::glibc_pie().overlay(blob.clone()).build().bytes;
+        let mut elf = super::super::parse(&bytes, &Limits::default()).unwrap();
+        let seg = elf.segments.iter_mut().find(|s| s.kind == PT_NOTE).unwrap();
+        seg.offset = (bytes.len() - blob.len()) as u64;
+        seg.filesz = blob.len() as u64;
+        (bytes, elf)
+    }
+
+    #[test]
+    fn max_notes_is_enforced() {
+        let (bytes, elf) = many_notes(5000);
+        let n = parse(&elf, &bytes, &Limits::default(), &Deadline::never()).unwrap();
+        assert_eq!(n.count, Limits::default().max_notes);
+        assert!(n.limit_reached);
+    }
+
+    #[test]
+    fn budget_bounds_note_walking() {
+        let (bytes, elf) = many_notes(100);
+        let limits = Limits {
+            max_parser_steps: 10,
+            ..Limits::default()
+        };
+        assert!(matches!(
+            parse(&elf, &bytes, &limits, &Deadline::never()),
+            Err(AnalysisError::LimitExceeded { .. })
+        ));
+        // The budget re-checks the clock every `Budget::CHECK_EVERY` steps, so
+        // a long walk (here: max_notes raised) stops at the deadline.
+        let (bytes, elf) = many_notes(5000);
+        let long = Limits {
+            max_notes: 10_000,
+            ..Limits::default()
+        };
+        assert!(matches!(
+            parse(&elf, &bytes, &long, &Deadline::expired()),
+            Err(AnalysisError::Timeout { .. })
+        ));
+    }
+
     #[test]
     fn oversized_note_does_not_loop_or_panic() {
         let built = profiles::glibc_pie().build();

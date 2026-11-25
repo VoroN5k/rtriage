@@ -23,7 +23,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [pe_parse, strings]
+        include:
+          - { target: pe_parse, seeds: pe }
+          - { target: elf_parse, seeds: elf }
+          - { target: strings, seeds: all }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -31,7 +34,7 @@ jobs:
       - run: rustup toolchain install nightly --profile minimal
       - run: cargo install cargo-fuzz --version 0.13.2 --locked
       # Seed corpus: synthetic fixtures only (never real samples).
-      - run: cargo run --locked -p rtriage-fixtures --example fuzz_corpus -- fuzz/corpus/${{ matrix.target }}
+      - run: cargo run --locked -p rtriage-fixtures --example fuzz_corpus -- fuzz/corpus/${{ matrix.target }} ${{ matrix.seeds }}
       - name: Run ${{ matrix.target }}
         run: >
           cargo +nightly fuzz run ${{ matrix.target }} --
