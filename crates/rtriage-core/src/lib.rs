@@ -12,10 +12,12 @@
 #![warn(missing_docs)]
 
 pub mod error;
+pub mod input;
 pub mod limits;
 pub mod report;
 
 pub use error::{AnalysisError, Error};
+pub use input::{load, sniff_format, Input};
 pub use limits::Limits;
 pub use report::{
     Category, Confidence, Evidence, Facts, FileInfo, Finding, Format, Report, ReportBuilder, Risk,
