@@ -48,7 +48,34 @@ pub struct Hashes {
 
 /// Neutral data extracted from the file. Analyzers add fields as they land.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
-pub struct Facts {}
+pub struct Facts {
+    /// Entropy profile; `None` until the entropy analyzer has run.
+    pub entropy: Option<EntropyFacts>,
+}
+
+/// Shannon entropy summary of the whole file.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct EntropyFacts {
+    /// Entropy of the entire file, in bits per byte (0.0–8.0).
+    pub whole_file: f64,
+    /// Window size used for region detection, in bytes.
+    pub window: u64,
+    /// Threshold a window had to reach to count as high-entropy.
+    pub high_threshold: f64,
+    /// Maximal runs of consecutive high-entropy windows, in file order.
+    pub high_regions: Vec<EntropyRegion>,
+}
+
+/// A contiguous byte range whose windows all reached the high-entropy threshold.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct EntropyRegion {
+    /// Start offset in the file.
+    pub offset: u64,
+    /// Length in bytes (a multiple of the window size).
+    pub len: u64,
+    /// Entropy of the whole region, in bits per byte.
+    pub entropy: f64,
+}
 
 /// How serious a finding is if it is meaningful. Ordered `Info < Low < Medium < High`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]

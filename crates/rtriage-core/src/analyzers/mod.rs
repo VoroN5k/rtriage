@@ -4,8 +4,10 @@
 //! writes facts/findings into a [`ReportBuilder`]. If one fails, the failure
 //! is recorded in the report and the remaining analyzers still run.
 
+pub mod entropy;
 pub mod hashes;
 
+use crate::config::{Config, Thresholds};
 use crate::error::AnalysisError;
 use crate::input::Input;
 use crate::limits::Limits;
@@ -18,6 +20,8 @@ pub struct AnalysisContext<'a> {
     pub input: &'a Input,
     /// Resource limits to enforce on file-derived values.
     pub limits: &'a Limits,
+    /// Heuristic thresholds.
+    pub thresholds: &'a Thresholds,
 }
 
 /// One independent analysis pass.
@@ -52,7 +56,9 @@ impl std::fmt::Debug for Registry {
 impl Default for Registry {
     /// All built-in analyzers.
     fn default() -> Self {
-        Self::empty().with(hashes::HashesAnalyzer)
+        Self::empty()
+            .with(hashes::HashesAnalyzer)
+            .with(entropy::EntropyAnalyzer)
     }
 }
 
@@ -77,8 +83,12 @@ impl Registry {
     }
 
     /// Runs every applicable analyzer on `input` and assembles the report.
-    pub fn analyze(&self, input: &Input, limits: &Limits) -> Report {
-        let ctx = AnalysisContext { input, limits };
+    pub fn analyze(&self, input: &Input, config: &Config) -> Report {
+        let ctx = AnalysisContext {
+            input,
+            limits: &config.limits,
+            thresholds: &config.thresholds,
+        };
         let mut out = ReportBuilder::new(input.file_info());
         for analyzer in self.analyzers.iter().filter(|a| a.applies_to(input.format)) {
             if let Err(err) = analyzer.run(&ctx, &mut out) {
@@ -156,7 +166,7 @@ mod tests {
         let report = Registry::empty()
             .with(Failing)
             .with(EmitsFinding)
-            .analyze(&unknown_input(), &Limits::default());
+            .analyze(&unknown_input(), &Config::default());
         assert_eq!(report.errors.len(), 1);
         assert_eq!(report.errors[0].analyzer, "failing");
         assert_eq!(report.findings.len(), 1);
@@ -166,7 +176,7 @@ mod tests {
     fn analyzers_are_filtered_by_format() {
         let report = Registry::empty()
             .with(PeOnly)
-            .analyze(&unknown_input(), &Limits::default());
+            .analyze(&unknown_input(), &Config::default());
         assert!(report.errors.is_empty());
     }
 

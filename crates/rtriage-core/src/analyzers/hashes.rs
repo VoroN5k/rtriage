@@ -54,8 +54,8 @@ fn to_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
     use crate::input::Input;
-    use crate::limits::Limits;
     use crate::Registry;
 
     #[test]
@@ -83,7 +83,7 @@ mod tests {
     #[test]
     fn analyzer_fills_file_info() {
         let input = Input::from_bytes("abc.bin", b"abc".to_vec());
-        let report = Registry::default().analyze(&input, &Limits::default());
+        let report = Registry::default().analyze(&input, &Config::default());
         let hashes = report.file.hashes.unwrap();
         assert_eq!(hashes.md5, "900150983cd24fb0d6963f7d28e17f72");
     }
