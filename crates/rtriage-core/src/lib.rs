@@ -28,6 +28,7 @@ pub mod report;
 pub mod rules;
 pub mod rules_dir;
 pub mod scoring;
+pub mod walk;
 
 pub use analyzers::{AnalysisContext, Analyzer, Registry};
 pub use config::{Config, Thresholds};

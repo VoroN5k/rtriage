@@ -7,7 +7,7 @@ use std::io::{self, Write};
 use rtriage_core::Report;
 use serde::Serialize;
 
-use super::{Failure, Run};
+use super::{Failure, Run, SkippedPath};
 
 /// Current JSON schema version.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -18,6 +18,7 @@ struct Document<'a> {
     tool: Tool,
     reports: &'a [Report],
     failures: &'a [Failure],
+    skipped: &'a [SkippedPath],
 }
 
 #[derive(Serialize)]
@@ -36,6 +37,7 @@ pub fn render(run: &Run, out: &mut dyn Write) -> io::Result<()> {
         },
         reports: &run.reports,
         failures: &run.failures,
+        skipped: &run.skipped,
     };
     serde_json::to_writer_pretty(&mut *out, &doc)?;
     writeln!(out)
@@ -60,6 +62,7 @@ mod tests {
                 path: "missing.bin".into(),
                 error: "cannot read missing.bin: not found".into(),
             }],
+            skipped: vec![],
         }
     }
 
@@ -110,6 +113,7 @@ mod tests {
             &Run {
                 reports: vec![report],
                 failures: vec![],
+                skipped: vec![],
             },
             &mut buf,
         )

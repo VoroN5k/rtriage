@@ -41,7 +41,23 @@ UPX signature and banner searches look only at the first and last 4 KiB /
 Exceeding a limit yields `AnalysisError::LimitExceeded`, never an allocation
 of the claimed size.
 
-## 2. Time limit (`crates/rtriage-core/src/deadline.rs`)
+## 2. Directory walking (`crates/rtriage-core/src/walk.rs`)
+
+- Paths named on the command line are used as given (a symlink root is
+  followed). Inside directories **symlinks are never followed** (no cycles,
+  no escaping the tree; Windows junctions count as symlinks) and FIFOs,
+  sockets and devices are skipped: opening a FIFO would block forever.
+- Bounds (`WalkOptions`): 32 directory levels below a root, 100 000 files in
+  total, 10 million entries read per directory. Hitting a bound is reported
+  under `skipped` (`depth_limit` / `file_limit`) and as a warning.
+- Deterministic: each directory keeps only its `room + 1` smallest names in
+  a bounded heap and sorts them, so the chosen files never depend on the
+  order the filesystem returns entries (ext4 is unsorted, NTFS is sorted).
+  Found by running the tests on Linux.
+- Files reached twice (overlapping roots) are analyzed once (canonical path).
+- Walking never opens files; size and format checks happen at load time.
+
+## 3. Time limit (`crates/rtriage-core/src/deadline.rs`)
 
 Rust threads cannot be killed from outside, so the limit is **cooperative**:
 
@@ -60,7 +76,7 @@ Rust threads cannot be killed from outside, so the limit is **cooperative**:
 
 The CLI exposes `--timeout <SECONDS>` (default 30, `0` is rejected).
 
-## 3. Panics
+## 4. Panics
 
 - Core code is panic-free by construction: `unwrap`, `expect`, `panic!` and
   slice indexing are denied by clippy outside tests.
@@ -73,7 +89,7 @@ The CLI exposes `--timeout <SECONDS>` (default 30, `0` is rejected).
   default hook would echo a panic payload (possibly containing file data)
   to the terminal unescaped.
 
-## 4. How this is tested
+## 5. How this is tested
 
 - **Property tests** (stable, every push): `crates/rtriage-core/tests/robustness_pe.rs`
   and `robustness_elf.rs`, sharing mutations and report invariants in
@@ -93,7 +109,7 @@ The CLI exposes `--timeout <SECONDS>` (default 30, `0` is rejected).
 - **Fuzzing** (nightly, weekly in CI): `pe_parse`, `elf_parse`, `strings`;
   see `fuzz/README.md`.
 
-## 5. Planned: process isolation for `rtriage scan` (M4)
+## 6. Planned: process isolation for `rtriage scan` (M4)
 
 In-process defences cannot stop everything: a stack overflow or an
 allocation failure aborts the whole process, and a hung third-party call

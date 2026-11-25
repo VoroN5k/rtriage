@@ -23,7 +23,7 @@ use rtriage_core::{
 };
 use serde::Serialize;
 
-use super::{Failure, Run};
+use super::{Failure, Run, SkippedPath};
 use crate::sanitize::sanitize;
 
 /// Classified strings shown per kind before collapsing into "+N more".
@@ -57,7 +57,8 @@ pub fn render(run: &Run, out: &mut dyn Write, opts: TextOptions) -> io::Result<(
         }
         render_report(report, out, &p, opts)?;
     }
-    render_failures(&run.failures, out, &p, !run.reports.is_empty())
+    render_failures(&run.failures, out, &p, !run.reports.is_empty())?;
+    render_skipped(&run.skipped, out, &p)
 }
 
 fn render_report(
@@ -445,8 +446,29 @@ fn render_failures(
     Ok(())
 }
 
-// ---------------------------------------------------------------- helpers
+/// Skipped paths shown before collapsing into "+N more".
+const SKIPPED_SHOWN: usize = 20;
 
+fn render_skipped(skipped: &[SkippedPath], out: &mut dyn Write, p: &Painter) -> io::Result<()> {
+    if skipped.is_empty() {
+        return Ok(());
+    }
+    writeln!(
+        out,
+        "\n{}  {} (not analyzed, not failures)",
+        p.heading("Skipped"),
+        group_digits(skipped.len() as u64)
+    )?;
+    for s in skipped.iter().take(SKIPPED_SHOWN) {
+        writeln!(out, "  {:<12} {}", enum_name(&s.reason), sanitize(&s.path))?;
+    }
+    if skipped.len() > SKIPPED_SHOWN {
+        writeln!(out, "  +{} more (see JSON)", skipped.len() - SKIPPED_SHOWN)?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------- helpers
 /// Applies styles only when color is enabled.
 struct Painter {
     color: bool,
@@ -1076,6 +1098,7 @@ mod tests {
                 path: "missing.bin".into(),
                 error: "cannot read missing.bin: not found".into(),
             }],
+            skipped: vec![],
         }
     }
 
@@ -1135,6 +1158,7 @@ mod tests {
             &Run {
                 reports: vec![report],
                 failures: vec![],
+                skipped: vec![],
             },
             PLAIN,
         );
@@ -1156,6 +1180,7 @@ mod tests {
             &Run {
                 reports: vec![report],
                 failures: vec![],
+                skipped: vec![],
             },
             PLAIN,
         );
@@ -1178,6 +1203,7 @@ mod tests {
             &Run {
                 reports: vec![report],
                 failures: vec![],
+                skipped: vec![],
             },
             PLAIN
         ));
@@ -1198,6 +1224,7 @@ mod tests {
             &Run {
                 reports: vec![report],
                 failures: vec![],
+                skipped: vec![],
             },
             TextOptions {
                 explain: true,
@@ -1254,6 +1281,7 @@ mod tests {
             &Run {
                 reports: vec![report],
                 failures: vec![],
+                skipped: vec![],
             },
             PLAIN
         ));
@@ -1274,6 +1302,7 @@ mod tests {
             &Run {
                 reports: vec![report],
                 failures: vec![],
+                skipped: vec![],
             },
             PLAIN
         ));
@@ -1291,6 +1320,7 @@ mod tests {
             &Run {
                 reports: vec![report],
                 failures: vec![],
+                skipped: vec![],
             },
             PLAIN,
         );

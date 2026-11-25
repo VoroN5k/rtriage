@@ -3,6 +3,7 @@
 pub mod json;
 pub mod text;
 
+use rtriage_core::walk::SkipReason;
 use rtriage_core::{Report, Severity};
 use serde::Serialize;
 
@@ -22,6 +23,17 @@ pub struct Run {
     pub reports: Vec<Report>,
     /// Files that could not be analyzed.
     pub failures: Vec<Failure>,
+    /// Paths skipped while walking directories (not failures).
+    pub skipped: Vec<SkippedPath>,
+}
+
+/// A path skipped on purpose while walking directories.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SkippedPath {
+    /// Path (lossy UTF-8).
+    pub path: String,
+    /// Why it was skipped.
+    pub reason: SkipReason,
 }
 
 /// Output-level filtering, applied after scoring: string selection and the

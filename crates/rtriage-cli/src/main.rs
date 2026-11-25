@@ -14,12 +14,13 @@ use anstream::{AutoStream, ColorChoice};
 use anyhow::Context;
 use clap::Parser;
 use rtriage_core::rules_dir::{RulesDir, KNOWN_FILES};
+use rtriage_core::walk::{self, WalkOptions};
 use rtriage_core::{Config, Registry};
 use tracing::level_filters::LevelFilter;
 
 use crate::cli::{Cli, OutputFormat};
 use crate::output::text::TextOptions;
-use crate::output::{Failure, Run};
+use crate::output::{Failure, Run, SkippedPath};
 use crate::sanitize::sanitize;
 
 /// At least one file could not be analyzed, or output could not be written.
@@ -53,9 +54,41 @@ fn run(cli: &Cli, config: &Config) -> anyhow::Result<ExitCode> {
     let mut result = Run {
         reports: Vec::new(),
         failures: Vec::new(),
+        skipped: Vec::new(),
     };
 
-    for path in &cli.files {
+    let walk = walk::collect(&cli.files, WalkOptions::default());
+    for e in &walk.errors {
+        let failure = Failure {
+            path: e.path.to_string_lossy().into_owned(),
+            error: format!("cannot read directory: {}", e.error),
+        };
+        eprintln!(
+            "error: {}: {}",
+            sanitize(&failure.path),
+            sanitize(&failure.error)
+        );
+        result.failures.push(failure);
+    }
+    if walk.limit_reached() {
+        eprintln!(
+            "warning: stopped after {} files (file limit); the rest is listed under skipped",
+            walk.files.len()
+        );
+    }
+    if walk.walked_directories && walk.files.is_empty() && walk.errors.is_empty() {
+        eprintln!("warning: no files found");
+    }
+    result.skipped = walk
+        .skipped
+        .iter()
+        .map(|s| SkippedPath {
+            path: s.path.to_string_lossy().into_owned(),
+            reason: s.reason,
+        })
+        .collect();
+
+    for path in &walk.files {
         match triage(path, &registry, config) {
             Ok(mut report) => {
                 output::prepare(&mut report, cli.all_strings, cli.min_severity.into());
@@ -124,7 +157,7 @@ fn triage(
     if path.is_dir() {
         return Err(Failure {
             path: shown,
-            error: "is a directory; directory scanning arrives with `rtriage scan`".into(),
+            error: "is a directory".into(),
         });
     }
     let input = rtriage_core::load(path, &config.limits).map_err(|e| Failure {

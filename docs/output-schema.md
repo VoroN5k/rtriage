@@ -33,8 +33,9 @@ Pre-release shape changes within version 1:
 | `schema_version` | integer | Schema version, currently `1`. |
 | `tool.name` | string | Always `"rtriage"`. |
 | `tool.version` | string | rtriage version that produced the document. |
-| `reports` | array of [Report](#report) | One per successfully analyzed file, in command-line order. |
-| `failures` | array of [Failure](#failure) | Files that could not be analyzed at all. |
+| `reports` | array of [Report](#report) | One per successfully analyzed file: command-line order, directories expanded depth-first with entries sorted by name. |
+| `failures` | array of [Failure](#failure) | Files that could not be analyzed at all (and directories that could not be read). |
+| `skipped` | array | Paths skipped on purpose while walking directories: `{ path, reason }`, `reason` is `symlink`, `special_file`, `depth_limit` or `file_limit`. Skips are not failures and do not change the exit code. |
 
 ### Failure
 

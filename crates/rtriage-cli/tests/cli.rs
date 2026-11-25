@@ -46,15 +46,66 @@ fn missing_file_exits_one_but_reports_others() {
     assert_eq!(v["failures"][0]["path"], "definitely-missing-file.bin");
 }
 
-#[test]
-fn directory_is_a_failure_with_hint() {
-    let out = rtriage(&[env!("CARGO_TARGET_TMPDIR")]);
-    assert_eq!(out.status.code(), Some(1));
-    let v = json(&out);
-    assert!(v["failures"][0]["error"]
-        .as_str()
+/// A fresh directory tree under cargo's temp dir; names ending in `/` are dirs.
+fn tree(name: &str, spec: &[&str]) -> PathBuf {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    for s in spec {
+        let p = root.join(s.trim_end_matches('/'));
+        if s.ends_with('/') {
+            std::fs::create_dir_all(&p).unwrap();
+        } else {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b"plain text, nothing to see").unwrap();
+        }
+    }
+    root
+}
+
+fn report_paths(v: &serde_json::Value) -> Vec<String> {
+    v["reports"]
+        .as_array()
         .unwrap()
-        .contains("directory"));
+        .iter()
+        .map(|r| r["file"]["path"].as_str().unwrap().replace('\\', "/"))
+        .collect()
+}
+
+#[test]
+fn directories_are_walked_recursively_in_sorted_order() {
+    let root = tree(
+        "walk-order",
+        &["b.bin", "a/z.bin", "a/sub/c.bin", "a/a.bin", "empty/"],
+    );
+    let out = rtriage(&[root.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0));
+    let v = json(&out);
+    let paths = report_paths(&v);
+    let tail: Vec<_> = paths
+        .iter()
+        .map(|p| p.rsplit("walk-order/").next().unwrap().to_owned())
+        .collect();
+    assert_eq!(tail, ["a/a.bin", "a/sub/c.bin", "a/z.bin", "b.bin"]);
+    assert_eq!(v["skipped"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn files_and_directories_mix_and_dedupe() {
+    let root = tree("walk-mix", &["x.bin", "y.bin"]);
+    let x = root.join("x.bin");
+    let out = rtriage(&[x.to_str().unwrap(), root.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(report_paths(&json(&out)).len(), 2);
+}
+
+#[test]
+fn empty_directory_warns_and_succeeds() {
+    let root = tree("walk-empty", &[]);
+    let out = rtriage(&[root.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no files found"));
+    assert_eq!(report_paths(&json(&out)).len(), 0);
 }
 
 #[test]
