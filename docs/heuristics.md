@@ -113,8 +113,11 @@ necessarily causes are explained by it.
   `PE-RESOURCE-HIGH-ENTROPY`; ELF: `ELF-SECTIONS-MISSING`, `ELF-SEGMENT-RWX`,
   `ELF-SEGMENT-HIGH-ENTROPY`, `ELF-PACKED-LIKELY`, `ELF-HARDENING-NO-PIE`,
   `ELF-HARDENING-NO-RELRO` (the stub's hardening says nothing about the packed
-  program). `ELF-HARDENING-EXEC-STACK` is **not** explained until checked
-  against a real UPX-packed binary.
+  program). `ELF-HARDENING-EXEC-STACK` is deliberately **not** explained:
+  checked on real UPX 4.2.4 output (static, PIE and non-PIE glibc hello
+  worlds), the stub keeps `PT_GNU_STACK` RW, so an executable stack in a UPX
+  file is not a UPX symptom. All three were confirmed with all three
+  indicators and scored 15 (`low`, `packed`).
   **API behavior groups (`PE-API-*`, `ELF-API-*`) are never suppressed**: the loader
   rejects them, and the scorer skips them even if a rule slipped through.
 - **Effect.** A suppressed finding stays in `findings` with
@@ -738,8 +741,16 @@ dynamic symbol must match).
 defined `.dynsym` symbols. If the file has a `.symtab`, an alternative that
 matches **only** once its defined functions are added (non-stripped static
 binaries: linked in, not necessarily used) is reported with **low
-confidence** and a note in the detail. Stripped static binaries expose no
-symbols: a documented blind spot.
+confidence** and a note in the detail. Static functions are never treated as
+**exports** (interposition only works through `.dynsym`) and never as an
+**import table** (a `max_imports` condition does not hold for them).
+Stripped static binaries expose no symbols: a documented blind spot.
+
+*Checked on real binaries (M4 prep):* a `gcc -static` glibc hello world
+defines `readdir`, `dlopen` and `dlsym` in `.symtab` and contains
+`/proc/self/...` strings; before this rule it got `ELF-API-PRELOAD-ROOTKIT`
+and `ELF-API-DYNAMIC-LOADING` (14 points). Regression test:
+`static_glibc_hello_matches_no_group`.
 
 | ID | Sev / Conf | Points | Category | ATT&CK | Fires when |
 |---|---|---|---|---|---|

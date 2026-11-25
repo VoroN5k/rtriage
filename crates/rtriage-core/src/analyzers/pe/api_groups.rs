@@ -40,7 +40,7 @@ impl Analyzer for PeApiGroupsAnalyzer {
                 .map(|(lib, name)| (Some(lib), name))
                 .collect(),
             exports: Vec::new(),
-            import_count: imports.total_functions(),
+            import_count: Some(imports.total_functions()),
         };
         let (findings, strings_error) =
             rule_engine::evaluate(rules, &view, None, &ctx.deadline, &mut || {

@@ -29,8 +29,10 @@ pub struct SymbolView<'a> {
     pub imports: Vec<(Option<&'a str>, &'a str)>,
     /// Defined (exported) symbols.
     pub exports: Vec<&'a str>,
-    /// Size of the import table, for `max_imports`.
-    pub import_count: u64,
+    /// Size of the dynamic import table, for `max_imports`; `None` when the
+    /// view is not an import table (static `.symtab` symbols), in which case
+    /// a `max_imports` condition never holds.
+    pub import_count: Option<u64>,
 }
 
 /// Evaluates every group of `rules`.
@@ -103,8 +105,10 @@ pub fn evaluate<'s>(
 
 /// Symbol evidence if every slot, `any_of`, `exports` and `max_imports` hold.
 fn match_symbols(when: &When, view: &SymbolView<'_>) -> Option<Vec<Evidence>> {
-    if when.max_imports.is_some_and(|max| view.import_count > max) {
-        return None;
+    if let Some(max) = when.max_imports {
+        if view.import_count.is_none_or(|n| n > max) {
+            return None;
+        }
     }
     let find = |p: &ApiPattern| view.imports.iter().find(|(_, n)| p.matches(n));
     let mut ev = Vec::new();

@@ -4,7 +4,9 @@
 //! symbols, with defined dynamic symbols as exports. If the file also has a
 //! static `.symtab`, an extended view adds its defined functions: a rule that
 //! only matches with those (code linked in, not necessarily used, typical of
-//! non-stripped static binaries) is reported with low confidence.
+//! non-stripped static binaries) is reported with low confidence. Static
+//! functions never count as exports or as an import table: a statically linked
+//! libc defines `readdir`, `dlopen` and `dlsym` in every static glibc binary.
 
 use super::dynamic::ElfDynamic;
 use crate::analyzers::rule_engine::{self, SymbolView, TextView};
@@ -64,7 +66,7 @@ impl Analyzer for ElfApiGroupsAnalyzer {
 fn primary_view(d: &ElfDynamic) -> SymbolView<'_> {
     let imports: Vec<_> = d.imports().map(|n| (None, n)).collect();
     SymbolView {
-        import_count: imports.len() as u64,
+        import_count: Some(imports.len() as u64),
         imports,
         exports: d
             .dynamic_symbols
@@ -86,9 +88,12 @@ fn extended_view<'a>(d: &'a ElfDynamic, primary: &SymbolView<'a>) -> Option<Symb
     if statics.is_empty() {
         return None;
     }
+    // Static functions widen only what code is present. They are never
+    // exports (interposition works through .dynsym only) and they are not an
+    // import table, so `exports` and `max_imports` cannot match through them.
     let mut v = primary.clone();
     v.imports.extend(statics.iter().map(|n| (None, *n)));
-    v.exports.extend(statics);
+    v.import_count = None;
     Some(v)
 }
 
@@ -285,6 +290,34 @@ mod tests {
             e,
             crate::report::Evidence::Field { name: "export", value } if value == "readdir"
         )));
+    }
+
+    /// Regression: a real `gcc -static` hello world (glibc) defines `readdir`,
+    /// `dlopen`, `dlsym`, `open`, `write` in `.symtab` and contains
+    /// `/proc/self/...` strings. It used to get PRELOAD-ROOTKIT and
+    /// DYNAMIC-LOADING through the static view.
+    #[test]
+    fn static_glibc_hello_matches_no_group() {
+        let bytes = ElfBuilder::x86_64()
+            .symtab(&[
+                "main",
+                "__libc_start_main",
+                "_dl_non_dynamic_init",
+                "readdir",
+                "readdir64",
+                "opendir",
+                "dlopen",
+                "__libc_dlopen_mode",
+                "dlsym",
+                "open",
+                "write",
+                "puts",
+            ])
+            .rodata(b"/proc/self/maps\0/proc/sys/kernel/osrelease\0hi\0".to_vec())
+            .build()
+            .bytes;
+        let r = run(bytes);
+        assert!(api(&r).is_empty(), "{:?}", api(&r));
     }
 
     #[test]

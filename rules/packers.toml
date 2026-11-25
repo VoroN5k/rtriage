@@ -51,7 +51,8 @@ explains = [
     "ELF-PACKED-LIKELY",         # same shape, now with a name
     "ELF-HARDENING-NO-PIE",      # the stub is ET_EXEC whatever the original was
     "ELF-HARDENING-NO-RELRO",    # the stub has no PT_GNU_RELRO; says nothing about the original
-    # ELF-HARDENING-EXEC-STACK: not until verified on a real UPX-packed hello
+    # Not ELF-HARDENING-EXEC-STACK: real UPX 4.2.4 output keeps PT_GNU_STACK RW,
+    # so an executable stack is not a UPX symptom.
 ]
 
 [[runtime]]
