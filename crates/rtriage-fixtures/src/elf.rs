@@ -201,6 +201,7 @@ pub struct ElfBuilder {
     flags: Option<u64>,
     flags_1: Option<u64>,
     imports: Vec<String>,
+    dyn_exports: Vec<String>,
     symtab: Vec<String>,
     build_id: Option<Vec<u8>>,
     extra: Vec<ExtraSection>,
@@ -232,6 +233,7 @@ impl ElfBuilder {
             flags: None,
             flags_1: None,
             imports: Vec::new(),
+            dyn_exports: Vec::new(),
             symtab: Vec::new(),
             build_id: None,
             extra: Vec::new(),
@@ -342,6 +344,13 @@ impl ElfBuilder {
         self.imports.extend(names.iter().map(|n| (*n).to_owned()));
         self
     }
+    /// Defined (exported) dynamic function symbols.
+    #[must_use]
+    pub fn dyn_exports(mut self, names: &[&str]) -> Self {
+        self.dyn_exports
+            .extend(names.iter().map(|n| (*n).to_owned()));
+        self
+    }
     /// Defined function symbols in a static `.symtab` (all at `.text`).
     #[must_use]
     pub fn symtab(mut self, names: &[&str]) -> Self {
@@ -391,6 +400,7 @@ impl ElfBuilder {
     fn has_dynamic(&self) -> bool {
         !self.needed.is_empty()
             || !self.imports.is_empty()
+            || !self.dyn_exports.is_empty()
             || self.rpath.is_some()
             || self.runpath.is_some()
             || self.flags.is_some()
@@ -474,11 +484,20 @@ impl ElfBuilder {
             .iter()
             .map(|n| str_off(n, &mut dynstr))
             .collect();
+        let export_offs: Vec<u64> = self
+            .dyn_exports
+            .iter()
+            .map(|n| str_off(n, &mut dynstr))
+            .collect();
         let sym_size = if w.is64 { 24 } else { 16 };
         let (dynsym_off, dynstr_off, hash_off) = if dynamic {
             let mut syms = vec![0u8; sym_size]; // null symbol
             for &name in &import_offs {
                 syms.extend(w.sym(name as u32, 0x12, 0, 0)); // GLOBAL FUNC, UND
+            }
+            for &name in &export_offs {
+                // GLOBAL FUNC, SHN_ABS: defined (value is irrelevant for analysis).
+                syms.extend(w.sym(name as u32, 0x12, 0xfff1, 0));
             }
             let s = push_sec(
                 &mut f,
@@ -499,7 +518,7 @@ impl ElfBuilder {
                 1,
             );
             // SysV hash with one bucket: loaders (and goblin) size .dynsym from nchain.
-            let nsyms = (import_offs.len() + 1) as u32;
+            let nsyms = (import_offs.len() + export_offs.len() + 1) as u32;
             let mut hash = Vec::new();
             hash.extend(w.u32(1)); // nbucket
             hash.extend(w.u32(nsyms)); // nchain

@@ -12,6 +12,7 @@ pub mod elf;
 pub mod entropy;
 pub mod hashes;
 pub mod pe;
+pub mod rule_engine;
 pub mod strings;
 
 use std::sync::OnceLock;
@@ -202,6 +203,7 @@ impl Default for Registry {
             .with(elf::headers::ElfHeadersAnalyzer)
             .with(elf::segments::ElfSegmentsAnalyzer)
             .with(elf::checksec::ElfChecksecAnalyzer)
+            .with(elf::api_groups::ElfApiGroupsAnalyzer)
     }
 }
 

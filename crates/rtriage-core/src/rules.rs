@@ -24,8 +24,12 @@ pub const MAX_RULES_FILE_SIZE: usize = 1 << 20;
 pub const MAX_GROUPS: usize = 256;
 /// Supported `schema_version`.
 pub const SCHEMA_VERSION: u32 = 1;
-/// Required prefix for group IDs (keeps them apart from built-in finding IDs).
+/// Required prefix for PE group IDs (keeps them apart from built-in finding IDs).
 pub const ID_PREFIX: &str = "PE-API-";
+/// Required prefix for ELF group IDs.
+pub const ELF_ID_PREFIX: &str = "ELF-API-";
+/// The ELF rules shipped with rtriage.
+pub const BUNDLED_ELF_API_RULES: &str = include_str!("../../../rules/elf_api_groups.toml");
 
 /// Why a rules file was rejected.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -104,6 +108,12 @@ struct RawWhen {
     #[serde(default = "one")]
     min: usize,
     strings: Option<RawStrings>,
+    unless: Option<RawStrings>,
+    #[serde(default)]
+    exports: Vec<String>,
+    max_imports: Option<u64>,
+    severity: Option<Severity>,
+    confidence: Option<Confidence>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -164,6 +174,37 @@ pub struct When {
     pub min: usize,
     /// Optional string condition.
     pub strings: Option<StringCondition>,
+    /// Strings that **veto** the match (e.g. markers of rootkit scanners,
+    /// which contain the same paths as what they look for).
+    pub unless: Option<StringCondition>,
+    /// At least one *defined* (exported) dynamic symbol must match (ELF only).
+    pub exports: Vec<ApiPattern>,
+    /// The import table must have at most this many entries.
+    pub max_imports: Option<u64>,
+    /// Severity for this alternative instead of the group's.
+    pub severity: Option<Severity>,
+    /// Confidence for this alternative instead of the group's.
+    pub confidence: Option<Confidence>,
+}
+
+/// Which binary format a rule file targets; decides the ID prefix and which
+/// conditions are available.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleTarget {
+    /// PE: `PE-API-*`, imports only.
+    Pe,
+    /// ELF: `ELF-API-*`, imports and exports.
+    Elf,
+}
+
+impl RuleTarget {
+    /// Required ID prefix.
+    pub fn prefix(self) -> &'static str {
+        match self {
+            RuleTarget::Pe => ID_PREFIX,
+            RuleTarget::Elf => ELF_ID_PREFIX,
+        }
+    }
 }
 
 /// Extracted strings must show `min_distinct` different hits.
@@ -207,11 +248,29 @@ impl ApiRuleSet {
         BUNDLED.as_ref()
     }
 
-    /// Parses and validates a rules file.
+    /// The bundled ELF rules (parsed once).
+    ///
+    /// # Errors
+    /// Only if the bundled file is broken, which the test suite prevents.
+    pub fn bundled_elf() -> Result<&'static ApiRuleSet, &'static RulesError> {
+        static BUNDLED: LazyLock<Result<ApiRuleSet, RulesError>> =
+            LazyLock::new(|| ApiRuleSet::parse_for(BUNDLED_ELF_API_RULES, RuleTarget::Elf));
+        BUNDLED.as_ref()
+    }
+
+    /// Parses and validates a PE rules file (`PE-API-*`).
     ///
     /// # Errors
     /// See [`RulesError`].
     pub fn parse(text: &str) -> Result<Self, RulesError> {
+        Self::parse_for(text, RuleTarget::Pe)
+    }
+
+    /// Parses and validates a rules file for `target`.
+    ///
+    /// # Errors
+    /// See [`RulesError`].
+    pub fn parse_for(text: &str, target: RuleTarget) -> Result<Self, RulesError> {
         if text.len() > MAX_RULES_FILE_SIZE {
             return Err(RulesError::TooLarge {
                 size: text.len(),
@@ -237,22 +296,23 @@ impl ApiRuleSet {
             if !seen.insert(g.id.clone()) {
                 return Err(invalid(&g.id, "duplicate id"));
             }
-            groups.push(validate_group(g)?);
+            groups.push(validate_group(g, target)?);
         }
         Ok(Self { groups })
     }
 }
 
-fn validate_group(g: RawGroup) -> Result<ApiGroup, RulesError> {
-    let id_ok = g.id.len() > ID_PREFIX.len()
-        && g.id.starts_with(ID_PREFIX)
+fn validate_group(g: RawGroup, target: RuleTarget) -> Result<ApiGroup, RulesError> {
+    let prefix = target.prefix();
+    let id_ok = g.id.len() > prefix.len()
+        && g.id.starts_with(prefix)
         && g.id
             .bytes()
             .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'-');
     if !id_ok {
         return Err(invalid(
             &g.id,
-            "id must be PE-API-<UPPERCASE-ALNUM> (A-Z, 0-9, '-')",
+            &format!("id must be {prefix}<UPPERCASE-ALNUM> (A-Z, 0-9, '-')"),
         ));
     }
     if g.title.trim().is_empty() {
@@ -272,7 +332,7 @@ fn validate_group(g: RawGroup) -> Result<ApiGroup, RulesError> {
     let whens = g
         .whens
         .into_iter()
-        .map(|w| validate_when(&g.id, w))
+        .map(|w| validate_when(&g.id, w, target))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(ApiGroup {
         id: intern(g.id),
@@ -287,9 +347,18 @@ fn validate_group(g: RawGroup) -> Result<ApiGroup, RulesError> {
     })
 }
 
-fn validate_when(id: &str, w: RawWhen) -> Result<When, RulesError> {
-    if w.slots.is_empty() && w.any_of.is_empty() {
-        return Err(invalid(id, "a when block needs `slots` or `any_of`"));
+fn validate_when(id: &str, w: RawWhen, target: RuleTarget) -> Result<When, RulesError> {
+    if w.slots.is_empty() && w.any_of.is_empty() && w.exports.is_empty() {
+        return Err(invalid(
+            id,
+            "a when block needs `slots`, `any_of` or `exports`",
+        ));
+    }
+    if !w.exports.is_empty() && target != RuleTarget::Elf {
+        return Err(invalid(id, "`exports` is only available in ELF rules"));
+    }
+    if w.max_imports == Some(0) {
+        return Err(invalid(id, "`max_imports` must be at least 1"));
     }
     if w.slots.iter().any(Vec::is_empty) {
         return Err(invalid(id, "empty slot"));
@@ -311,11 +380,22 @@ fn validate_when(id: &str, w: RawWhen) -> Result<When, RulesError> {
         .map(|p| pattern(id, p))
         .collect::<Result<Vec<_>, _>>()?;
     let strings = w.strings.map(|s| validate_strings(id, s)).transpose()?;
+    let unless = w.unless.map(|s| validate_strings(id, s)).transpose()?;
+    let exports = w
+        .exports
+        .iter()
+        .map(|p| pattern(id, p))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(When {
         slots,
         any_of,
         min: w.min,
         strings,
+        unless,
+        exports,
+        max_imports: w.max_imports,
+        severity: w.severity,
+        confidence: w.confidence,
     })
 }
 
@@ -498,6 +578,50 @@ slots = [["Foo", "Bar*"]]
             Err(RulesError::Invalid { .. })
         ));
         assert!(ApiRuleSet::parse("not toml [[[").is_err());
+    }
+
+    #[test]
+    fn when_extensions_parse() {
+        let text = MINIMAL.replace(
+            "slots = [[\"Foo\", \"Bar*\"]]",
+            "slots = [[\"Foo\"]]\nmax_imports = 5\nseverity = \"high\"\nconfidence = \"high\"\n\
+             unless = { contains = [\"Scanner\"] }",
+        );
+        let w = &ApiRuleSet::parse(&text).unwrap().groups[0].whens[0];
+        assert_eq!(w.max_imports, Some(5));
+        assert_eq!(
+            (w.severity, w.confidence),
+            (Some(Severity::High), Some(Confidence::High))
+        );
+        assert_eq!(w.unless.as_ref().unwrap().contains_lower, ["scanner"]);
+    }
+
+    #[test]
+    fn exports_are_elf_only() {
+        let pe = MINIMAL.replace("slots = [[\"Foo\", \"Bar*\"]]", "exports = [\"readdir\"]");
+        assert!(matches!(
+            ApiRuleSet::parse(&pe),
+            Err(RulesError::Invalid { .. })
+        ));
+        let elf = pe.replace("PE-API-TEST", "ELF-API-TEST");
+        assert!(ApiRuleSet::parse_for(&elf, RuleTarget::Elf).is_ok());
+    }
+
+    #[test]
+    fn prefixes_are_per_target() {
+        assert!(ApiRuleSet::parse_for(MINIMAL, RuleTarget::Elf).is_err());
+        assert!(
+            ApiRuleSet::parse_for(&MINIMAL.replace("PE-API-", "ELF-API-"), RuleTarget::Pe).is_err()
+        );
+    }
+
+    #[test]
+    fn zero_max_imports_is_rejected() {
+        let t = MINIMAL.replace(
+            "slots = [[\"Foo\", \"Bar*\"]]",
+            "slots = [[\"Foo\"]]\nmax_imports = 0",
+        );
+        assert!(ApiRuleSet::parse(&t).is_err());
     }
 
     #[test]

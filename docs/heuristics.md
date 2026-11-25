@@ -682,6 +682,41 @@ the process (library hijacking).
 embedded builds. Exec stack: code using nested-function trampolines. RPATH:
 build-tree paths accidentally left in development builds.
 
+### ELF API behavior groups (`elf-api-groups` analyzer)
+
+Data in [`rules/elf_api_groups.toml`](../rules/elf_api_groups.toml), same
+engine as the PE groups (`crates/rtriage-core/src/analyzers/rule_engine.rs`),
+IDs prefixed `ELF-API-`. Rule-format extensions (available to PE rules too,
+schema still 1): `unless` (strings that veto a `when`), `max_imports`,
+per-`when` `severity` / `confidence`; and ELF-only `exports` (a defined
+dynamic symbol must match).
+
+**Symbols.** Imports are undefined named `.dynsym` symbols; exports are
+defined `.dynsym` symbols. If the file has a `.symtab`, an alternative that
+matches **only** once its defined functions are added (non-stripped static
+binaries: linked in, not necessarily used) is reported with **low
+confidence** and a note in the detail. Stripped static binaries expose no
+symbols: a documented blind spot.
+
+| ID | Sev / Conf | Points | Category | ATT&CK | Fires when |
+|---|---|---|---|---|---|
+| `ELF-API-SHELL` | High / Medium with a shell path string (`/bin/sh`, `/bin/bash`, ...); otherwise **Medium / Low** | 28 / 6 | `network` | T1059.004 | `socket` + `connect`/`bind` + `dup2`/`dup3` + an `exec*`/`system`/`popen` |
+| `ELF-API-FILELESS` | Medium / Low | 6 | `injection` | T1620 | `memfd_create` + `fexecve`/`execveat`/`execve` |
+| `ELF-API-PRELOAD-ROOTKIT` | Medium / Medium | 11 | `persistence` | T1574.006 | open + write APIs and the string `/etc/ld.so.preload`; **or** a library exporting `readdir`/`readdir64` that imports `dlsym`/`dlvsym` and mentions `/proc`. Vetoed by rootkit-scanner markers (`chkrootkit`, `rkhunter`, `Rootkit Hunter`, `unhide`, `not infected`, ...). |
+| `ELF-API-PERSISTENCE` | Medium / Low | 6 | `persistence` | T1053.003, T1543.002, T1546.004 | open + write APIs and a cron / systemd / `rc.local` / init.d / shell-startup path |
+| `ELF-API-ANTIDEBUG` | Low / Low | 2 | `anti_analysis` | T1622 | `ptrace` + `prctl`; or open + the string `TracerPid` |
+| `ELF-API-NETWORK` | Low / Medium | 4 | `network` | T1071 | `socket` + `connect`, or libcurl, plus a URL / IP string |
+| `ELF-API-DYNAMIC-LOADING` | Medium / Medium | 11 | `obfuscation` | T1027.007 | `dlopen` + `dlsym`/`dlvsym` with at most 20 imports |
+| `ELF-API-RANSOM-CRYPTO` | High / Low | 16 | `impact` | T1486 | OpenSSL/libsodium encryption + `opendir`/`nftw`/`fts_open` + `readdir`/`fts_read` + at least 8 different file extensions in strings |
+
+**Negative tests** cover: BusyBox (shell and cron strings, no matching
+imports), `ptrace` alone (debuggers), `memfd_create` alone, socket clients
+without endpoints, a libc-like library that *defines* `readdir` and `dlsym`,
+and rootkit scanners carrying `/etc/ld.so.preload` plus their markers.
+**Trade-off of `unless`.** A veto string can be planted by malware to evade
+a group; it is used only where scanners and tools would otherwise trigger
+reliably (the rootkit group), and the veto list is visible in the rules file.
+
 ### Facts that suppress heuristics
 
 - `facts.pe.headers.managed_dotnet`: set when the CLR (COM descriptor) data

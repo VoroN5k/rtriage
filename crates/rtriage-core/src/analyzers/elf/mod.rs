@@ -11,6 +11,7 @@
 //! entry sizes and extents were validated here, and always inside
 //! [`guarded`]. Dynamic section, symbols and notes get own bounded parsers.
 
+pub mod api_groups;
 pub mod checksec;
 pub mod dynamic;
 pub mod headers;

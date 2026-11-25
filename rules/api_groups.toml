@@ -14,6 +14,9 @@
 #   - `strings`: optional; extracted strings must show at least `min_distinct`
 #     different hits among `kinds` (string classifications) and `contains`
 #     (case-insensitive substrings).
+#   - optional per `when`: `unless` (strings that veto the match),
+#     `max_imports` (import table size limit), `severity` / `confidence`
+#     (override the group's). `exports` is ELF-only (elf_api_groups.toml).
 #
 # Severity / confidence / category / ATT&CK are documented in
 # docs/heuristics.md together with the scoring table. Changing a group's

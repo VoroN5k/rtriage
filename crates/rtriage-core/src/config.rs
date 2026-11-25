@@ -23,6 +23,9 @@ pub struct Config {
     /// API behavior rules; `None` = the bundled `rules/api_groups.toml`.
     #[serde(skip)]
     pub api_rules: Option<Arc<ApiRuleSet>>,
+    /// ELF API behavior rules; `None` = the bundled `rules/elf_api_groups.toml`.
+    #[serde(skip)]
+    pub elf_api_rules: Option<Arc<ApiRuleSet>>,
     /// Packer explanations; `None` = the bundled `rules/packers.toml`.
     #[serde(skip)]
     pub packer_rules: Option<Arc<PackerRuleSet>>,
@@ -43,6 +46,7 @@ impl Default for Config {
             thresholds: Thresholds::default(),
             strings_min_len: Self::DEFAULT_STRINGS_MIN_LEN,
             api_rules: None,
+            elf_api_rules: None,
             packer_rules: None,
         }
     }

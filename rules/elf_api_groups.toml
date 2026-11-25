@@ -1,0 +1,197 @@
+# rtriage API behavior groups for ELF files.
+#
+# Same format as api_groups.toml (see its header), plus fields available to
+# every rule file:
+#   unless       strings that VETO the match (any hit rejects this `when`)
+#   max_imports  the import table must have at most this many symbols
+#   severity / confidence   override the group's values for this `when`
+# and one ELF-only field:
+#   exports      at least one DEFINED dynamic symbol must match (hooking .so files)
+#
+# Symbols: imports are the undefined named symbols of .dynsym. When a `when`
+# only matches after adding the static .symtab (non-stripped static binaries,
+# where those functions are linked in but not necessarily used), the finding's
+# confidence drops to low. See docs/heuristics.md.
+
+schema_version = 1
+
+# --------------------------------------------------------------------------
+[[group]]
+id = "ELF-API-SHELL"
+title = "Reverse or bind shell"
+severity = "high"
+confidence = "medium"
+category = "network"
+attack = ["T1059.004"]
+rationale = """Opens a socket, connects or binds it, duplicates it onto the \
+standard descriptors and executes a program: the classic reverse/bind shell. \
+With a shell path in the strings this is near-certain."""
+false_positives = """Remote administration tools, inetd-style servers and \
+network test utilities (netcat, socat, BusyBox applets) do the same."""
+
+[[group.when]]
+slots = [
+    ["socket"],
+    ["connect", "bind"],
+    ["dup2", "dup3"],
+    ["execve", "execl", "execlp", "execle", "execv", "execvp", "execvpe", "system", "popen"],
+]
+strings = { contains = ["/bin/sh", "/bin/bash", "/bin/dash", "/bin/ash", "/bin/zsh", "/system/bin/sh"] }
+
+# Same API chain without a shell path: weaker.
+[[group.when]]
+slots = [
+    ["socket"],
+    ["connect", "bind"],
+    ["dup2", "dup3"],
+    ["execve", "execl", "execlp", "execle", "execv", "execvp", "execvpe", "system", "popen"],
+]
+severity = "medium"
+confidence = "low"
+
+# --------------------------------------------------------------------------
+[[group]]
+id = "ELF-API-FILELESS"
+title = "Runs code from an anonymous in-memory file"
+severity = "medium"
+confidence = "low"
+category = "injection"
+attack = ["T1620"]
+rationale = """Creates an anonymous in-memory file and executes it: a payload \
+can run without ever touching the disk."""
+false_positives = """Some sandboxes, container runtimes and self-updating \
+programs use memfd_create + fexecve legitimately."""
+
+[[group.when]]
+slots = [
+    ["memfd_create"],
+    ["fexecve", "execveat", "execve"],
+]
+
+# --------------------------------------------------------------------------
+[[group]]
+id = "ELF-API-PRELOAD-ROOTKIT"
+title = "LD_PRELOAD rootkit behaviour"
+severity = "medium"
+confidence = "medium"
+category = "persistence"
+attack = ["T1574.006"]
+rationale = """Writes /etc/ld.so.preload (forcing a library into every \
+process), or is a shared library that overrides readdir and resolves the real \
+one with dlsym, the way userland rootkits hide files and processes."""
+false_positives = """Debugging and profiling preloaders. Rootkit scanners \
+(chkrootkit, rkhunter, unhide) contain the same paths; their markers veto the \
+match."""
+
+[[group.when]]
+slots = [
+    ["fopen", "fopen64", "open", "open64", "openat"],
+    ["fwrite", "fputs", "fprintf", "write", "dprintf"],
+]
+strings = { contains = ["/etc/ld.so.preload"] }
+unless = { contains = ["chkrootkit", "rkhunter", "rootkit hunter", "unhide", "not infected", "infected", "possible rootkit", "suspicious files"] }
+
+[[group.when]]
+exports = ["readdir", "readdir64"]
+slots = [["dlsym", "dlvsym"]]
+strings = { contains = ["/proc"] }
+unless = { contains = ["chkrootkit", "rkhunter", "rootkit hunter", "unhide"] }
+
+# --------------------------------------------------------------------------
+[[group]]
+id = "ELF-API-PERSISTENCE"
+title = "Writes a cron, systemd or shell-startup entry"
+severity = "medium"
+confidence = "low"
+category = "persistence"
+attack = ["T1053.003", "T1543.002", "T1546.004"]
+rationale = """Opens files for writing and references cron tables, systemd \
+unit directories, rc.local or shell startup files."""
+false_positives = """Package managers, installers, configuration tools and \
+cron/systemd utilities themselves."""
+
+[[group.when]]
+slots = [
+    ["fopen", "fopen64", "open", "open64", "openat"],
+    ["fwrite", "fputs", "fprintf", "write", "dprintf", "system", "popen"],
+]
+strings = { contains = ["/etc/crontab", "/var/spool/cron", "/etc/cron.d", "crontab -", "/etc/systemd/system", "/lib/systemd/system", "/etc/rc.local", "/etc/init.d/", ".bashrc", ".bash_profile", "/etc/profile.d"] }
+
+# --------------------------------------------------------------------------
+[[group]]
+id = "ELF-API-ANTIDEBUG"
+title = "Anti-debugging checks"
+severity = "low"
+confidence = "low"
+category = "anti_analysis"
+attack = ["T1622"]
+rationale = """Uses ptrace together with prctl (e.g. PTRACE_TRACEME plus \
+PR_SET_DUMPABLE), or reads TracerPid from /proc to detect a debugger."""
+false_positives = """Debuggers, tracers and sandboxes call ptrace; hardened \
+daemons disable core dumps with prctl."""
+
+[[group.when]]
+any_of = ["ptrace", "prctl"]
+min = 2
+
+[[group.when]]
+slots = [["fopen", "fopen64", "open", "open64", "openat"]]
+strings = { contains = ["TracerPid"] }
+
+# --------------------------------------------------------------------------
+[[group]]
+id = "ELF-API-NETWORK"
+title = "Network client with embedded addresses"
+severity = "low"
+confidence = "medium"
+category = "network"
+attack = ["T1071"]
+rationale = """Imports a socket or HTTP client API set and contains at least \
+one URL or IP address: a hard-coded remote endpoint."""
+false_positives = """Any networked program with a built-in default server or \
+update URL."""
+
+[[group.when]]
+slots = [["socket"], ["connect"]]
+strings = { kinds = ["url", "ipv4", "ipv6"] }
+
+[[group.when]]
+slots = [["curl_easy_init", "curl_easy_perform"]]
+strings = { kinds = ["url", "ipv4", "ipv6"] }
+
+# --------------------------------------------------------------------------
+[[group]]
+id = "ELF-API-DYNAMIC-LOADING"
+title = "APIs resolved at run time"
+severity = "medium"
+confidence = "medium"
+category = "obfuscation"
+attack = ["T1027.007"]
+rationale = """A tiny dynamic import table with dlopen and dlsym: the real API \
+set is looked up at run time and hidden from import analysis."""
+false_positives = """Small plugin loaders and launchers."""
+
+[[group.when]]
+slots = [["dlopen"], ["dlsym", "dlvsym"]]
+max_imports = 20
+
+# --------------------------------------------------------------------------
+[[group]]
+id = "ELF-API-RANSOM-CRYPTO"
+title = "File encryption with document-extension targeting"
+severity = "high"
+confidence = "low"
+category = "impact"
+attack = ["T1486"]
+rationale = """Imports encryption and directory traversal APIs and contains \
+many document/database file extensions: the shape of ransomware that walks the \
+file system and encrypts selected file types."""
+false_positives = """Backup, archiving and file-sync tools."""
+
+[[group.when]]
+slots = [
+    ["EVP_EncryptInit_ex", "EVP_EncryptUpdate", "EVP_CipherInit_ex", "EVP_CipherUpdate", "AES_encrypt", "AES_set_encrypt_key", "crypto_secretbox", "crypto_stream_xor"],
+    ["opendir", "fts_open", "nftw", "nftw64"],
+    ["readdir", "readdir64", "fts_read"],
+]
+strings = { contains = [".docx", ".xlsx", ".pptx", ".pdf", ".jpg", ".png", ".zip", ".rar", ".7z", ".sql", ".mdb", ".bak", ".psd", ".odt", ".csv", ".tar", ".vmdk"], min_distinct = 8 }

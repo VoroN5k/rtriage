@@ -1,19 +1,15 @@
-//! API behavior groups: data-driven combinations of imported APIs (and
-//! optionally strings) from [`crate::rules`].
+//! PE API behavior groups: data-driven combinations of imported APIs (and
+//! optionally strings) from [`crate::rules`], evaluated by
+//! [`crate::analyzers::rule_engine`].
 //!
 //! Imports and strings come from [`AnalysisContext`], computed once and shared,
 //! so this analyzer does not depend on the imports or strings analyzers.
-//! Strings are only extracted if some rule actually needs them.
 
-use std::collections::BTreeSet;
-
+use crate::analyzers::rule_engine::{self, SymbolView};
 use crate::analyzers::{AnalysisContext, Analyzer};
 use crate::error::AnalysisError;
-use crate::report::{Evidence, ExtractedString, Finding, Format, ReportBuilder, StringsFacts};
-use crate::rules::{ApiGroup, ApiPattern, ApiRuleSet, StringCondition, When};
-
-/// String evidence items attached per finding.
-const MAX_STRING_EVIDENCE: usize = 5;
+use crate::report::{Format, ReportBuilder};
+use crate::rules::ApiRuleSet;
 
 /// Evaluates the configured (or bundled) API behavior rules.
 #[derive(Debug, Clone, Copy, Default)]
@@ -38,135 +34,33 @@ impl Analyzer for PeApiGroupsAnalyzer {
                 reason: format!("bundled API rules are invalid: {e}"),
             })?,
         };
-        let apis: Vec<(&str, &str)> = imports.api_names().collect();
-
-        // Strings are expensive; fetch them lazily, once, and remember failures.
-        let mut strings: Option<Result<&StringsFacts, AnalysisError>> = None;
-        let mut first_error = None;
-
-        for group in &rules.groups {
-            ctx.deadline.check()?;
-            for when in &group.whens {
-                let Some(api_ev) = match_apis(when, &apis) else {
-                    continue;
-                };
-                let string_ev = match &when.strings {
-                    None => Some(Vec::new()),
-                    Some(cond) => match strings.get_or_insert_with(|| ctx.strings()) {
-                        Ok(s) => match_strings(cond, s),
-                        Err(e) => {
-                            first_error.get_or_insert_with(|| e.clone());
-                            None
-                        }
-                    },
-                };
-                if let Some(string_ev) = string_ev {
-                    out.push_finding(finding(group, api_ev, string_ev));
-                    break; // first matching alternative wins
-                }
-            }
+        let view = SymbolView {
+            imports: imports
+                .api_names()
+                .map(|(lib, name)| (Some(lib), name))
+                .collect(),
+            exports: Vec::new(),
+            import_count: imports.total_functions(),
+        };
+        let (findings, strings_error) =
+            rule_engine::evaluate(rules, &view, None, &ctx.deadline, &mut || ctx.strings())?;
+        for f in findings {
+            out.push_finding(f);
         }
-        first_error.map_or(Ok(()), Err)
+        strings_error.map_or(Ok(()), Err)
     }
 }
 
-/// Import evidence if every slot and the `any_of` condition are satisfied.
-fn match_apis(when: &When, apis: &[(&str, &str)]) -> Option<Vec<Evidence>> {
-    let find = |pattern: &ApiPattern| apis.iter().find(|(_, name)| pattern.matches(name));
-    let mut ev = Vec::new();
-    for slot in &when.slots {
-        let &(lib, name) = slot.iter().find_map(find)?;
-        ev.push(import(lib, name));
-    }
-    if !when.any_of.is_empty() {
-        let hits: Vec<_> = when.any_of.iter().filter_map(find).collect();
-        let distinct: BTreeSet<&str> = hits.iter().map(|(_, n)| *n).collect();
-        if distinct.len() < when.min {
-            return None;
-        }
-        ev.extend(hits.iter().map(|&&(lib, name)| import(lib, name)));
-    }
-    dedup(&mut ev);
-    Some(ev)
+#[cfg(test)]
+fn import(lib: &str, name: &str) -> crate::report::Evidence {
+    rule_engine::import_ev(Some(lib), name)
 }
-
-/// String evidence if at least `min_distinct` different kinds/substrings hit.
-fn match_strings(cond: &StringCondition, strings: &StringsFacts) -> Option<Vec<Evidence>> {
-    let mut hits: Vec<&ExtractedString> = Vec::new();
-    let mut distinct = 0usize;
-    for kind in &cond.kinds {
-        if let Some(s) = strings.items.iter().find(|s| s.kinds.contains(kind)) {
-            distinct += 1;
-            hits.push(s);
-        }
-    }
-    for needle in &cond.contains_lower {
-        if let Some(s) = strings
-            .items
-            .iter()
-            .find(|s| s.value.to_lowercase().contains(needle.as_str()))
-        {
-            distinct += 1;
-            hits.push(s);
-        }
-    }
-    if distinct < cond.min_distinct {
-        return None;
-    }
-    let mut ev: Vec<Evidence> = hits
-        .into_iter()
-        .map(|s| Evidence::String {
-            offset: s.offset,
-            encoding: s.encoding,
-            value: s.value.clone(),
-        })
-        .collect();
-    dedup(&mut ev);
-    ev.truncate(MAX_STRING_EVIDENCE);
-    Some(ev)
-}
-
-fn finding(group: &ApiGroup, api_ev: Vec<Evidence>, string_ev: Vec<Evidence>) -> Finding {
-    let mut f = Finding::new(
-        group.id,
-        group.severity,
-        group.category,
-        group.title.clone(),
-    )
-    .confidence(group.confidence)
-    .detail(group.rationale.clone());
-    for e in api_ev.into_iter().chain(string_ev) {
-        f = f.evidence(e);
-    }
-    for t in &group.attack {
-        f = f.attack(t);
-    }
-    f
-}
-
-fn import(lib: &str, name: &str) -> Evidence {
-    Evidence::Import {
-        library: Some(lib.to_owned()),
-        symbol: name.to_owned(),
-    }
-}
-
-/// Removes repeated evidence, keeping first occurrences in order.
-fn dedup(ev: &mut Vec<Evidence>) {
-    let mut out: Vec<Evidence> = Vec::with_capacity(ev.len());
-    for e in ev.drain(..) {
-        if !out.contains(&e) {
-            out.push(e);
-        }
-    }
-    *ev = out;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
     use crate::input::Input;
+    use crate::report::Evidence;
     use crate::report::{Report, Severity};
     use crate::Registry;
     use rtriage_fixtures::pe::{profiles, Arch, PeBuilder, Section};
