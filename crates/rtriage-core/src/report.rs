@@ -65,6 +65,40 @@ pub struct PeFacts {
     pub headers: Option<PeHeaderFacts>,
     /// Section table with per-section entropy.
     pub sections: Option<Vec<PeSectionFacts>>,
+    /// Import table and imphash.
+    pub imports: Option<PeImportsFacts>,
+}
+
+/// Import table summary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PeImportsFacts {
+    /// Imported libraries in import-directory order.
+    pub libraries: Vec<PeImportLibrary>,
+    /// Number of imported functions across all libraries.
+    pub total_functions: u64,
+    /// `true` if parsing stopped at `max_imports` / `max_import_libraries`.
+    pub limit_reached: bool,
+    /// pefile-compatible import hash (lowercase hex MD5); `None` if there are
+    /// no imported functions.
+    pub imphash: Option<String>,
+}
+
+/// One imported library (DLL) and its functions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PeImportLibrary {
+    /// DLL name as stored (raw attacker data: sanitize before display).
+    pub name: String,
+    /// Imported functions in thunk order.
+    pub functions: Vec<PeImportedFunction>,
+}
+
+/// One imported function: by name, or by ordinal only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PeImportedFunction {
+    /// Function name; `None` for ordinal-only imports.
+    pub name: Option<String>,
+    /// Ordinal; `Some` only for ordinal-only imports.
+    pub ordinal: Option<u16>,
 }
 
 /// One PE section.

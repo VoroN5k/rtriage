@@ -23,6 +23,8 @@ pub struct Limits {
     pub max_segments: usize,
     /// Max imported symbols processed across all libraries. Default: 65 536.
     pub max_imports: usize,
+    /// Max imported libraries (import descriptors) processed. Default: 4096.
+    pub max_import_libraries: usize,
     /// Max exported symbols processed. Default: 65 536.
     pub max_exports: usize,
     /// Max strings kept by the string extractor. Default: 200 000.
@@ -61,6 +63,7 @@ impl Default for Limits {
             max_sections: 4096,
             max_segments: 4096,
             max_imports: 65_536,
+            max_import_libraries: 4096,
             max_exports: 65_536,
             max_strings: 200_000,
             max_string_len: 4096,

@@ -58,6 +58,12 @@ pub struct Thresholds {
     /// Minimum `VirtualSize` for an executable section with no raw data to be
     /// reported as `PE-SECTION-VIRTUAL-ONLY`. Default: 4096 (one page).
     pub virtual_only_min_size: u32,
+    /// `PE-IMPORTS-FEW` fires at or below this many imported functions.
+    /// Default: 10 (CRT-linked programs import dozens).
+    pub imports_few_max: u64,
+    /// `PE-IMPORTS-DYNAMIC-RESOLUTION` requires the import table to be at most
+    /// this many functions. Default: 20.
+    pub dynamic_resolution_max_imports: u64,
 }
 
 impl Thresholds {
@@ -77,6 +83,8 @@ impl Default for Thresholds {
             entropy_high: Self::DEFAULT_ENTROPY_HIGH,
             section_entropy_min_size: 512,
             virtual_only_min_size: 0x1000,
+            imports_few_max: 10,
+            dynamic_resolution_max_imports: 20,
         }
     }
 }

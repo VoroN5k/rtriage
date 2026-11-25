@@ -3,17 +3,23 @@ source: crates/rtriage-cli/src/output/text.rs
 expression: "render_string(&Run { reports: vec![report], failures: vec![], }, PLAIN)"
 ---
 sample.exe
-  Type     PE                         Size  1 536 bytes (1.5 KiB)
-  MD5      75eff2506ec6599c40b4e831b5c77952
-  SHA-1    1b5ababe983d97c09175e9e78bfd6077e0424a6e
-  SHA-256  2bcd1b6b1a93bde08f14185ce8594f65419ca5d2b2365e00c14802b4a8776c3e
+  Type     PE                         Size  2 048 bytes (2.0 KiB)
+  MD5      5d10477857bf03e7375c9ee4aff7867d
+  SHA-1    698868c50720fd5e6daed3ab85597d4918e270d4
+  SHA-256  c87a96434e0f232b4a7658ba78c43928683b05aee07ca560e367d30bbe7eaca0
   Risk     [CLEAN-LOOKING] score 0
 
 Findings
+  [MEDIUM] PE-IMPORTS-DYNAMIC-RESOLUTION  APIs resolved at run time  (confidence: medium, obfuscation)
+      The import table is tiny (3 functions) but includes a library loader and GetProcAddress: the real API set is resolved at run time and hidden from static import analysis. Typical of packers and shellcode-style loaders.
+      - import KERNEL32.dll!LoadLibraryA
+      - import KERNEL32.dll!GetProcAddress
+      - imported functions = 3
+      ATT&CK: T1027.007
   [INFO] PE-CHECKSUM-MISMATCH  Image checksum does not match  (confidence: medium, anomaly)
       The stored checksum does not match the file. Windows ignores it for user-mode images, but it shows the file changed after linking (patching, appended data, resigning).
       - CheckSum = 0x00001234
-      - computed = 0x00001083
+      - computed = 0x00005336
   [INFO] PE-TIMESTAMP-ZERO  Link timestamp is zero  (confidence: medium, anomaly)
       TimeDateStamp was cleared. Common for Go binaries and some reproducible-build toolchains; also used to hide the build date.
       - TimeDateStamp = 0
@@ -23,17 +29,22 @@ PE
   Entry point  0x00001000 in #0 ".text"
   Image base   0x140000000
   Timestamp    0 (cleared)
-  Checksum     0x00001234 (MISMATCH; computed 0x00001083)
+  Checksum     0x00001234 (MISMATCH; computed 0x00005336)
   DLL flags    high_entropy_va, dynamic_base, nx_compat, terminal_server_aware
 
 Sections
     #  Name         VirtAddr   VirtSize    RawSize  Perm Entropy
     0  .text          0x1000       0x40      0x200  r-x    0.544
     1  .data          0x2000       0x20      0x200  rw-    0.000
+    2  .rdata         0x3000       0xc5      0x200  r--    1.259
+
+Imports  3 functions from 2 libraries, imphash 23348cee39f096177826b251d9725204
+  KERNEL32.dll            2  LoadLibraryA, GetProcAddress
+  WS2_32.dll              1  #23
 
 Entropy
-  Whole file  0.635 bits/byte
+  Whole file  0.932 bits/byte
   No high-entropy regions (>= 7.20, window 4096)
 
-Strings  2 found (ASCII + UTF-16LE, min 5), 0 classified
+Strings  7 found (ASCII + UTF-16LE, min 5), 0 classified
   (no classified strings; use --all-strings to list all)

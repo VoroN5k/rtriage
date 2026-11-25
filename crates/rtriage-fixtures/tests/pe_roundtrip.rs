@@ -231,3 +231,15 @@ fn go_profile_parses() {
         assert_eq!(pe.imports.len(), profiles::GO_KERNEL32_IMPORTS.len());
     }
 }
+
+/// Writes the imphash vectors to `$RTRIAGE_DUMP_DIR/<name>.bin` so they can
+/// be hashed with pefile. Run manually:
+/// `RTRIAGE_DUMP_DIR=... cargo test -p rtriage-fixtures -- --ignored dump_imphash_vectors`
+#[test]
+#[ignore = "manual: dumps fixtures for cross-checking with pefile"]
+fn dump_imphash_vectors() {
+    let dir = std::env::var("RTRIAGE_DUMP_DIR").expect("set RTRIAGE_DUMP_DIR");
+    for (name, b) in rtriage_fixtures::pe::imphash_vectors::cases() {
+        std::fs::write(format!("{dir}/{name}.bin"), b.build().bytes).unwrap();
+    }
+}

@@ -770,6 +770,12 @@ mod tests {
             )
             .section(Section::rdata(".idata", vec![0; 64]));
         let r = analyze(b.build().bytes);
-        assert!(r.findings.is_empty(), "{:?}", ids(&r));
+        // Only section/entry-point findings matter here (no imports are built,
+        // so the imports analyzer legitimately reports PE-IMPORTS-FEW).
+        let own: Vec<_> = ids(&r)
+            .into_iter()
+            .filter(|id| id.starts_with("PE-SECTION") || id.starts_with("PE-ENTRYPOINT"))
+            .collect();
+        assert!(own.is_empty(), "{own:?}");
     }
 }

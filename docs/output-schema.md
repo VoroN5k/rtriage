@@ -103,6 +103,15 @@ Every member is `null` if its analyzer did not run.
 | `entropy` | number \| null | Entropy of raw data present in the file; `null` if under 512 bytes. |
 | `raw_truncated` | bool | Raw data claimed past end of file. |
 
+`pe.imports`:
+
+| Field | Type | Description |
+|---|---|---|
+| `libraries` | array | `{ name, functions: [{ name, ordinal }] }` in descriptor / thunk order. `name` is `null` for ordinal-only imports, `ordinal` is `null` for named ones. Names are raw (sanitize before display). |
+| `total_functions` | integer | Imported functions across all libraries. |
+| `limit_reached` | bool | Parsing stopped at `max_imports` or `max_import_libraries`. |
+| `imphash` | string \| null | pefile-compatible import hash; `null` without imports. |
+
 A PE that fails to parse produces one `errors` entry from analyzer
 `pe-parse`; the other PE analyzers then leave their facts `null`.
 

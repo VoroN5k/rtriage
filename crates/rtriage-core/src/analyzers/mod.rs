@@ -126,6 +126,7 @@ impl Default for Registry {
             .with(pe::PeParseAnalyzer)
             .with(pe::headers::PeHeadersAnalyzer)
             .with(pe::sections::PeSectionsAnalyzer)
+            .with(pe::imports::PeImportsAnalyzer)
     }
 }
 

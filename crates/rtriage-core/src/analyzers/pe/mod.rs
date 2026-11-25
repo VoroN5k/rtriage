@@ -9,6 +9,8 @@
 //! get their own bounded parsers in later modules.
 
 pub mod headers;
+pub mod imports;
+pub mod ordinals;
 pub mod sections;
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -141,6 +143,25 @@ impl PeImage {
     /// The section containing `rva`, if any (first match in table order).
     pub fn section_for_rva(&self, rva: u32) -> Option<&SectionHeader> {
         self.sections.iter().find(|s| s.contains_rva(rva))
+    }
+
+    /// File offset of `rva`, if it maps to bytes present in the file.
+    ///
+    /// RVAs below `SizeOfHeaders` map 1:1 into the headers; otherwise the
+    /// containing section's raw data is used. RVAs in a section's
+    /// virtual-only tail, or past EOF, have no file offset.
+    pub fn rva_to_offset(&self, rva: u32, file_len: usize) -> Option<usize> {
+        let offset = if rva < self.size_of_headers {
+            u64::from(rva)
+        } else {
+            let s = self.section_for_rva(rva)?;
+            let delta = rva.checked_sub(s.virtual_address)?;
+            if delta >= s.raw_size {
+                return None;
+            }
+            u64::from(s.raw_offset).checked_add(u64::from(delta))?
+        };
+        usize::try_from(offset).ok().filter(|&o| o < file_len)
     }
 
     /// Data directory `index` if present and non-empty.

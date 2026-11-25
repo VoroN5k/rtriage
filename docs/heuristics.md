@@ -232,6 +232,73 @@ section's region; packer stubs usually sit in an appended last section.
 **False positives.** Some protectors used by legitimate software (DRM),
 and unusual linker layouts (Low/Low variant).
 
+### PE imports (`pe-imports` analyzer)
+
+Imports are parsed by rtriage's own bounded parser (not goblin): at most
+`max_import_libraries` (4096) descriptors and `max_imports` (65 536) thunks
+**in total per file**, one budget step per loop iteration, names cut at 256
+bytes. A table cut short by a limit sets `limit_reached`, reports a
+`limit_exceeded` error, and is **not** judged by `PE-IMPORTS-FEW` /
+`PE-IMPORTS-DYNAMIC-RESOLUTION` (a partial count would be meaningless).
+
+#### Imphash
+
+`facts.pe.imports.imphash` follows pefile's `get_imphash` exactly:
+
+1. For each library in descriptor order, lowercase the DLL name and strip a
+   trailing `.dll`, `.ocx` or `.sys` (other extensions such as `.drv` stay).
+2. For each function in thunk order: its name, lowercased; for ordinal-only
+   imports, the name from pefile's **frozen** imphash tables for
+   `ws2_32.dll` / `wsock32.dll` / `oleaut32.dll`, else `ord<N>`.
+3. Join `lib.func` pairs with `,` and take the MD5.
+
+The ordinal tables are generated from pefile's `ordlookup/imphash_*.py`
+(MIT) into `crates/rtriage-core/src/analyzers/pe/ordinals.rs`. pefile keeps
+those tables frozen for compatibility with VirusTotal, YARA and YARA-X; the
+non-frozen tables pefile uses elsewhere differ and must not be used here.
+No imported functions → `imphash` is `null`.
+
+#### `PE-IMPORTS-DYNAMIC-RESOLUTION`
+
+| | |
+|---|---|
+| Severity / confidence | Medium / Medium (11 points) |
+| Category | `obfuscation` |
+| ATT&CK | T1027.007 (Dynamic API Resolution) |
+| Trigger | Imports a loader (`LoadLibraryA/W`, `LoadLibraryExA/W`, `LdrLoadDll`) **and** a resolver (`GetProcAddress`, `LdrGetProcedureAddress`) **and** the table has at most `dynamic_resolution_max_imports` (20) functions. Not evaluated for managed .NET or a limit-truncated table. |
+| Evidence | `import` of the loader and the resolver, `field imported functions` |
+
+**Rationale.** A tiny table with a loader and a resolver means the real API
+set is looked up at run time, hiding it from import analysis.
+**False positives.** Small plugin hosts and launchers. Programs with normal
+import tables (e.g. the Go runtime: 40 kernel32 imports including
+`LoadLibraryW` + `GetProcAddress`) are above the size limit and not flagged.
+
+#### `PE-IMPORTS-FEW`
+
+| | |
+|---|---|
+| Severity / confidence | Low / Low (2 points) |
+| Category | `anomaly` |
+| Trigger | At most `imports_few_max` (10) imported functions, including none at all. |
+| Not evaluated | Managed .NET; DLLs with `AddressOfEntryPoint == 0` (resource-only); limit-truncated tables; **files where `PE-IMPORTS-DYNAMIC-RESOLUTION` fired** (the stronger finding already explains the small table). |
+| Evidence | `field imported functions`, every imported function |
+
+**False positives.** Tiny utilities built without a C runtime, some drivers.
+
+#### `PE-IMPORTS-ORDINAL-ONLY`
+
+| | |
+|---|---|
+| Severity / confidence | Low / Low (2 points) |
+| Category | `obfuscation` |
+| Trigger | A library with at least one import where **every** import is by ordinal, excluding libraries legitimately imported that way: `ws2_32`, `wsock32`, `oleaut32`, `comctl32`, `shlwapi`, `shell32`, `msvbvm50/60`, and any `mfc*` DLL. |
+| Evidence | up to 5 `import lib!#N` per library, `field more ordinals` for the rest |
+
+**Rationale.** Importing a private DLL purely by number hides which
+functions are used.
+**False positives.** Vendor SDK DLLs exported by ordinal only.
+
 ### Facts that suppress heuristics
 
 - `facts.pe.headers.managed_dotnet`: set when the CLR (COM descriptor) data

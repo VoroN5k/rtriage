@@ -881,3 +881,47 @@ pub mod profiles {
             .auto_section_name(".idata")
     }
 }
+
+/// Fixed import layouts used to cross-check imphash against pefile.
+/// The expected hashes live next to the rtriage test that consumes them.
+pub mod imphash_vectors {
+    use super::{profiles, Arch, ImportEntry, PeBuilder};
+
+    /// `(name, builder)` pairs. Never change existing entries: their
+    /// expected hashes were computed with pefile.
+    pub fn cases() -> Vec<(&'static str, PeBuilder)> {
+        vec![
+            (
+                "named_x86",
+                PeBuilder::minimal(Arch::X86)
+                    .import(
+                        "KERNEL32.dll",
+                        &["LoadLibraryA", "GetProcAddress", "ExitProcess"],
+                    )
+                    .import("USER32.dll", &["MessageBoxA"]),
+            ),
+            (
+                "ordinals_x64",
+                PeBuilder::minimal(Arch::X64)
+                    .import_ordinals("WS2_32.dll", &[1, 4, 115, 9999])
+                    .import_ordinals("OLEAUT32.dll", &[2, 9])
+                    .import_ordinals("custom.ocx", &[7])
+                    .import("odd.drv", &["Foo"]),
+            ),
+            (
+                "mixed_case_x64",
+                PeBuilder::minimal(Arch::X64)
+                    .import_entries(
+                        "Kernel32.DLL",
+                        vec![
+                            ImportEntry::Name("CreateFileW".into()),
+                            ImportEntry::Ordinal(42),
+                        ],
+                    )
+                    .import_ordinals("wsock32.dll", &[3]),
+            ),
+            ("go_like_x64", profiles::go_like(Arch::X64)),
+            ("dotnet_like_x86", profiles::dotnet_like(Arch::X86)),
+        ]
+    }
+}

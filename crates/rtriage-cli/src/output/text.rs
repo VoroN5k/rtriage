@@ -9,7 +9,8 @@ use std::io::{self, Write};
 
 use anstyle::{AnsiColor, Style};
 use rtriage_core::report::{
-    EntropyFacts, ExtractedString, PeSectionFacts, StringEncoding, StringKind, StringsFacts,
+    EntropyFacts, ExtractedString, PeImportsFacts, PeSectionFacts, StringEncoding, StringKind,
+    StringsFacts,
 };
 use rtriage_core::{Evidence, Finding, Format, PeHeaderFacts, Report, RiskLevel, Severity};
 use serde::Serialize;
@@ -57,6 +58,9 @@ fn render_report(
     }
     if let Some(s) = r.facts.pe.as_ref().and_then(|pe| pe.sections.as_deref()) {
         render_pe_sections(s, out, p)?;
+    }
+    if let Some(i) = r.facts.pe.as_ref().and_then(|pe| pe.imports.as_ref()) {
+        render_pe_imports(i, out, p)?;
     }
     if let Some(e) = &r.facts.entropy {
         render_entropy(e, out, p)?;
@@ -393,6 +397,55 @@ fn render_pe_sections(
     Ok(())
 }
 
+/// Functions listed per library before "+N more".
+const IMPORTS_PER_LIBRARY: usize = 8;
+
+fn render_pe_imports(i: &PeImportsFacts, out: &mut dyn Write, p: &Painter) -> io::Result<()> {
+    write!(
+        out,
+        "\n{}  {} functions from {} libraries",
+        p.heading("Imports"),
+        group_digits(i.total_functions),
+        i.libraries.len()
+    )?;
+    if let Some(h) = &i.imphash {
+        write!(out, ", imphash {h}")?;
+    }
+    if i.limit_reached {
+        write!(out, " (limit reached, table truncated)")?;
+    }
+    writeln!(out)?;
+    if i.libraries.is_empty() {
+        return writeln!(out, "  (no import table)");
+    }
+    for lib in &i.libraries {
+        let shown: Vec<String> = lib
+            .functions
+            .iter()
+            .take(IMPORTS_PER_LIBRARY)
+            .map(|f| match (&f.name, f.ordinal) {
+                (Some(n), _) => sanitize(n).into_owned(),
+                (None, Some(o)) => format!("#{o}"),
+                (None, None) => "?".to_owned(),
+            })
+            .collect();
+        let more = lib.functions.len().saturating_sub(IMPORTS_PER_LIBRARY);
+        writeln!(
+            out,
+            "  {:<20} {:>4}  {}{}",
+            sanitize(&lib.name),
+            lib.functions.len(),
+            shown.join(", "),
+            if more > 0 {
+                format!(", +{more} more")
+            } else {
+                String::new()
+            }
+        )?;
+    }
+    Ok(())
+}
+
 fn format_name(f: Format) -> &'static str {
     match f {
         Format::Pe => "PE",
@@ -614,6 +667,8 @@ mod tests {
         let built = PeBuilder::minimal(Arch::X64)
             .timestamp(0)
             .checksum(Checksum::Value(0x1234))
+            .import("KERNEL32.dll", &["LoadLibraryA", "GetProcAddress"])
+            .import_ordinals("WS2_32.dll", &[23])
             .build();
         let input = Input::from_bytes("sample.exe", built.bytes);
         let mut report = Registry::default().analyze(&input, &Config::default());

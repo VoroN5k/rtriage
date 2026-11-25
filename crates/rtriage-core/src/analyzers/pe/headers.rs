@@ -340,8 +340,16 @@ mod tests {
         r.facts.pe.as_ref().unwrap().headers.as_ref().unwrap()
     }
 
+    /// IDs of this analyzer's findings only (other PE analyzers also run).
     fn ids(r: &Report) -> Vec<&'static str> {
-        r.findings.iter().map(|f| f.id).collect()
+        own(r).iter().map(|f| f.id).collect()
+    }
+
+    fn own(r: &Report) -> Vec<&crate::report::Finding> {
+        r.findings
+            .iter()
+            .filter(|f| f.id.starts_with("PE-TIMESTAMP") || f.id.starts_with("PE-CHECKSUM"))
+            .collect()
     }
 
     // ---- facts
@@ -428,7 +436,7 @@ mod tests {
     fn zero_timestamp_is_info() {
         let r = analyze(PeBuilder::minimal(Arch::X64).timestamp(0).build().bytes);
         assert_eq!(ids(&r), ["PE-TIMESTAMP-ZERO"]);
-        assert_eq!(r.findings[0].severity, Severity::Info);
+        assert_eq!(own(&r)[0].severity, Severity::Info);
         assert!(headers(&r).timestamp.utc.is_none());
     }
 
@@ -442,14 +450,14 @@ mod tests {
                 .bytes,
         );
         assert_eq!(ids(&r), ["PE-TIMESTAMP-FUTURE"]);
-        let f = &r.findings[0];
+        let f = &own(&r)[0];
         assert_eq!((f.severity, f.confidence), (Severity::Low, Confidence::Low));
     }
 
     #[test]
     fn past_timestamp_is_clean() {
         let r = analyze(PeBuilder::minimal(Arch::X64).build().bytes);
-        assert!(r.findings.is_empty());
+        assert!(own(&r).is_empty());
     }
 
     #[test]
@@ -461,7 +469,7 @@ mod tests {
                 .build()
                 .bytes,
         );
-        assert!(r.findings.is_empty());
+        assert!(own(&r).is_empty());
     }
 
     // ---- checksum findings
@@ -485,7 +493,7 @@ mod tests {
                 .build()
                 .bytes,
         );
-        assert!(r.findings.is_empty());
+        assert!(own(&r).is_empty());
     }
 
     #[test]
@@ -497,7 +505,7 @@ mod tests {
                 .bytes,
         );
         assert_eq!(ids(&r), ["PE-CHECKSUM-MISMATCH"]);
-        let f = &r.findings[0];
+        let f = &own(&r)[0];
         assert_eq!(
             (f.severity, f.confidence),
             (Severity::Info, Confidence::Medium)
@@ -514,7 +522,7 @@ mod tests {
         );
         assert_eq!(headers(&r).kind, PeKind::Driver);
         assert_eq!(ids(&r), ["PE-CHECKSUM-MISMATCH"]);
-        let f = &r.findings[0];
+        let f = &own(&r)[0];
         assert_eq!(
             (f.severity, f.confidence),
             (Severity::Low, Confidence::High)
@@ -530,7 +538,7 @@ mod tests {
                 .build()
                 .bytes,
         );
-        assert!(r.findings.is_empty());
+        assert!(own(&r).is_empty());
     }
 
     // ---- profiles (negative tests)
