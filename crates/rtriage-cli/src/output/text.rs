@@ -61,6 +61,19 @@ pub fn render(run: &Run, out: &mut dyn Write, opts: TextOptions) -> io::Result<(
     render_skipped(&run.skipped, out, &p)
 }
 
+/// One report rendered as text, without the run's separators or failure list
+/// (used by worker processes, whose output the parent concatenates).
+pub fn render_report_string(report: &Report, opts: TextOptions) -> String {
+    let p = Painter {
+        color: opts.color,
+        defang: opts.defang,
+    };
+    let mut buf = Vec::new();
+    // Writing to a Vec cannot fail.
+    let _ = render_report(report, &mut buf, &p, opts);
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
 fn render_report(
     r: &Report,
     out: &mut dyn Write,

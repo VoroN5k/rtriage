@@ -11,8 +11,8 @@ use clap::{ArgAction, Parser, ValueEnum};
 #[derive(Debug, Parser)]
 #[command(name = "rtriage", version, about, long_about = None)]
 pub struct Cli {
-    /// Files to triage.
-    #[arg(required = true, value_name = "FILE")]
+    /// Files or directories to triage (directories are walked recursively).
+    #[arg(required_unless_present = "worker", value_name = "FILE")]
     pub files: Vec<PathBuf>,
 
     /// Output format.
@@ -76,6 +76,16 @@ pub struct Cli {
     /// Only print errors on stderr.
     #[arg(short, long)]
     pub quiet: bool,
+
+    /// Internal: run as a worker process speaking the line protocol on
+    /// stdin/stdout (see docs/robustness.md). Not for interactive use.
+    #[arg(long, hide = true, conflicts_with = "files")]
+    pub worker: bool,
+
+    /// Internal: a worker renders text bodies with ANSI colors (ignored
+    /// outside `--worker`).
+    #[arg(long, hide = true)]
+    pub worker_color: bool,
 }
 
 /// Report output format.
@@ -182,6 +192,15 @@ mod tests {
     #[test]
     fn rejects_zero_strings_min() {
         assert!(Cli::try_parse_from(["rtriage", "--strings-min", "0", "a"]).is_err());
+    }
+
+    #[test]
+    fn worker_mode_needs_no_files_and_is_hidden() {
+        let cli = Cli::try_parse_from(["rtriage", "--worker"]).unwrap();
+        assert!(cli.worker && cli.files.is_empty());
+        assert!(Cli::try_parse_from(["rtriage", "--worker", "a.exe"]).is_err());
+        let help = Cli::command().render_long_help().to_string();
+        assert!(!help.contains("--worker"));
     }
 
     #[test]

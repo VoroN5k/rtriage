@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::AnalysisError;
 
 /// Detected container format of the input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Format {
@@ -1005,7 +1005,9 @@ impl Finding {
 }
 
 /// Aggregate risk level. Ordered `CleanLooking < Low < Medium < High`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum RiskLevel {
     /// Nothing notable found. Not a guarantee the file is benign.

@@ -4,6 +4,7 @@
 mod cli;
 mod output;
 mod sanitize;
+mod worker;
 
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -42,6 +43,9 @@ fn main() -> ExitCode {
             return ExitCode::from(EXIT_USAGE);
         }
     };
+    if cli.worker {
+        return worker::run_worker(&cli, &config);
+    }
     match run(&cli, &config) {
         Ok(code) => code,
         Err(err) => {

@@ -109,25 +109,47 @@ The CLI exposes `--timeout <SECONDS>` (default 30, `0` is rejected).
 - **Fuzzing** (nightly, weekly in CI): `pe_parse`, `elf_parse`, `strings`;
   see `fuzz/README.md`.
 
-## 6. Planned: process isolation for `rtriage scan` (M4)
+## 6. Process isolation (M4)
 
 In-process defences cannot stop everything: a stack overflow or an
 allocation failure aborts the whole process, and a hung third-party call
-cannot be interrupted. Batch mode will therefore run analysis in **child
-processes**:
+cannot be interrupted. So directories and multi-file runs analyse each file
+in a **worker process**; a single file runs in-process (cooperative deadline
+and limits apply there).
 
-- `rtriage scan` spawns workers (`rtriage` itself in a hidden worker mode),
-  each analysing a slice of the file list and streaming one JSON report per
-  file over stdout.
-- The parent enforces a hard wall-clock limit per file
-  (`--timeout` plus a grace period) and kills the worker if it is exceeded.
-- A crashed or killed worker only loses the file it was working on: that file
-  is reported in `failures` (`crashed` / `timed out`) and a new worker
-  continues with the rest of the list.
-- Workers are started with an explicit, empty environment except what they
-  need, and only receive file paths, never file contents, on the command line.
-- Platform memory caps (Job Objects on Windows, `setrlimit` on Unix) are a
-  possible follow-up; they need OS-specific code outside the core crate.
+**Worker mode** (`rtriage --worker`, hidden; `crates/rtriage-cli/src/worker.rs`).
+Protocol version 1, one JSON object per line:
 
-Single-file mode (`rtriage <FILE>`) keeps running in-process for speed and
-simplicity; the cooperative deadline and limits apply there.
+| Direction | Message |
+|---|---|
+| worker → parent, once | `{"type":"ready","protocol":1}` |
+| parent → worker | `{"id":N,"path":{"utf8":"..."}}`; non-UTF-8 paths travel losslessly as `{"unix":[bytes]}` or `{"windows":[u16 units]}` |
+| worker → parent | `{"type":"report","id":N,"summary":{...},"body":"..."}` or `{"type":"failure","id":N,"error":"..."}` |
+| parent closes stdin | worker exits with code 0 |
+
+- One request in flight: the worker reads the next request only after
+  answering, so the parent always knows which file a crash or hang belongs to.
+- `summary` (path, format, size, score, level, top finding, packed, partial,
+  error count) is all the parent parses; it is computed before display
+  filtering, so `--min-severity` never changes scores or gates. `body` is
+  the report already rendered for the run's output format and options; the
+  parent only concatenates bodies, so it never holds parsed full reports.
+- Bounds: request lines are capped at 1 MiB (paths only); the parent reads
+  each worker's stdout in its **own thread** and caps response lines
+  (default 64 MiB). An oversized or malformed response means the worker is
+  misbehaving: it is killed and the file is reported as failed.
+- A malformed request ends the worker with exit code 2 (protocol error).
+- Workers start with a **cleared environment** (only what the platform
+  needs, e.g. `SystemRoot` on Windows) and receive paths over stdin, never
+  file contents.
+- `--worker-color` (hidden) lets the parent decide colour for text bodies.
+- Tests drive real worker processes (`crates/rtriage-cli/tests/worker.rs`).
+  The cargo feature `test-hooks` (never in release builds) adds
+  `RTRIAGE_TEST_WORKER=crash:<name>|hang:<name>|spam:<name>` for
+  deterministic crashes, hangs and endless output.
+
+Planned in the next steps: the parent's pool (`--jobs`), per-file wall-clock
+kill (`--timeout` plus a grace period), `crashed` / `timed_out` failures with
+worker restart, and serialized YARA rules sent once to each worker. Platform
+memory caps (Job Objects, `setrlimit`) remain a possible follow-up outside
+the core crate.
