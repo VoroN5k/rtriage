@@ -9,11 +9,14 @@
 //! get their own bounded parsers in later modules.
 
 pub mod headers;
+pub mod sections;
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+use crate::analyzers::{AnalysisContext, Analyzer};
 use crate::error::AnalysisError;
 use crate::limits::Limits;
+use crate::report::{Format, ReportBuilder};
 
 /// Size of the COFF file header.
 const COFF_HEADER_SIZE: usize = 20;
@@ -45,6 +48,8 @@ pub struct PeImage {
     pub image_base: u64,
     /// `SizeOfImage`.
     pub size_of_image: u32,
+    /// `SizeOfHeaders`.
+    pub size_of_headers: u32,
     /// `CheckSum` as stored.
     pub checksum: u32,
     /// File offset of the `CheckSum` field.
@@ -87,7 +92,37 @@ pub struct SectionHeader {
     pub characteristics: u32,
 }
 
+/// `IMAGE_SCN_*` flags used by the analyzers.
+pub mod scn {
+    /// Contains code.
+    pub const CNT_CODE: u32 = 0x0000_0020;
+    /// Contains initialized data.
+    pub const CNT_INITIALIZED_DATA: u32 = 0x0000_0040;
+    /// Contains uninitialized data.
+    pub const CNT_UNINITIALIZED_DATA: u32 = 0x0000_0080;
+    /// Can be discarded after loading.
+    pub const MEM_DISCARDABLE: u32 = 0x0200_0000;
+    /// Shared between processes.
+    pub const MEM_SHARED: u32 = 0x1000_0000;
+    /// Executable.
+    pub const MEM_EXECUTE: u32 = 0x2000_0000;
+    /// Readable.
+    pub const MEM_READ: u32 = 0x4000_0000;
+    /// Writable.
+    pub const MEM_WRITE: u32 = 0x8000_0000;
+}
+
 impl SectionHeader {
+    /// `IMAGE_SCN_MEM_EXECUTE` is set.
+    pub fn is_executable(&self) -> bool {
+        self.characteristics & scn::MEM_EXECUTE != 0
+    }
+
+    /// `IMAGE_SCN_MEM_WRITE` is set.
+    pub fn is_writable(&self) -> bool {
+        self.characteristics & scn::MEM_WRITE != 0
+    }
+
     /// `true` if `rva` falls inside this section's virtual range
     /// (`VirtualSize`, or `SizeOfRawData` when `VirtualSize` is 0).
     pub fn contains_rva(&self, rva: u32) -> bool {
@@ -121,6 +156,38 @@ impl PeImage {
     pub fn is_managed_dotnet(&self) -> bool {
         self.directory(DIRECTORY_CLR).is_some()
     }
+}
+
+/// Reports a failure to parse the PE headers exactly once.
+///
+/// Other PE analyzers call [`AnalysisContext::pe`] too, but stay silent when
+/// it fails (see [`pe_or_skip`]), so a broken header yields one error entry,
+/// not one per analyzer.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PeParseAnalyzer;
+
+impl Analyzer for PeParseAnalyzer {
+    fn name(&self) -> &'static str {
+        "pe-parse"
+    }
+
+    fn applies_to(&self, format: Format) -> bool {
+        format == Format::Pe
+    }
+
+    fn run(
+        &self,
+        ctx: &AnalysisContext<'_>,
+        _out: &mut ReportBuilder,
+    ) -> Result<(), AnalysisError> {
+        ctx.pe().map(|_| ())
+    }
+}
+
+/// The parsed PE, or `None` if parsing failed (already reported by
+/// [`PeParseAnalyzer`]).
+pub fn pe_or_skip<'c>(ctx: &'c AnalysisContext<'_>) -> Option<&'c PeImage> {
+    ctx.pe().ok()
 }
 
 /// Runs a third-party parser call, converting a panic into
@@ -240,6 +307,7 @@ pub fn parse(data: &[u8], limits: &Limits) -> Result<PeImage, AnalysisError> {
         entry_rva: optional.standard_fields.address_of_entry_point,
         image_base: w.image_base,
         size_of_image: w.size_of_image,
+        size_of_headers: w.size_of_headers,
         checksum: w.check_sum,
         checksum_offset: optional_offset.saturating_add(CHECKSUM_OFFSET_IN_OPTIONAL),
         subsystem: w.subsystem,

@@ -123,7 +123,9 @@ impl Default for Registry {
             .with(hashes::HashesAnalyzer)
             .with(entropy::EntropyAnalyzer)
             .with(strings::StringsAnalyzer)
+            .with(pe::PeParseAnalyzer)
             .with(pe::headers::PeHeadersAnalyzer)
+            .with(pe::sections::PeSectionsAnalyzer)
     }
 }
 

@@ -59,10 +59,41 @@ pub struct Facts {
 
 /// PE facts. Each part is filled by its own analyzer and is `None` if that
 /// analyzer did not run or failed.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct PeFacts {
     /// COFF / optional header summary.
     pub headers: Option<PeHeaderFacts>,
+    /// Section table with per-section entropy.
+    pub sections: Option<Vec<PeSectionFacts>>,
+}
+
+/// One PE section.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PeSectionFacts {
+    /// Index in the section table.
+    pub index: usize,
+    /// Name (raw attacker data: sanitize before display).
+    pub name: String,
+    /// `VirtualAddress`.
+    pub virtual_address: u32,
+    /// `VirtualSize`.
+    pub virtual_size: u32,
+    /// `PointerToRawData`.
+    pub raw_offset: u32,
+    /// `SizeOfRawData`.
+    pub raw_size: u32,
+    /// Raw `Characteristics`.
+    pub characteristics_raw: u32,
+    /// Memory permissions as `rwx` with `-` for unset bits, e.g. `r-x`.
+    pub permissions: String,
+    /// Names of notable flags: `code`, `initialized_data`,
+    /// `uninitialized_data`, `discardable`, `shared`.
+    pub flags: Vec<&'static str>,
+    /// Shannon entropy of the raw data; `None` if fewer than
+    /// `section_entropy_min_size` bytes are available.
+    pub entropy: Option<f64>,
+    /// `true` if `PointerToRawData + SizeOfRawData` runs past the end of the file.
+    pub raw_truncated: bool,
 }
 
 /// Kind of PE image.

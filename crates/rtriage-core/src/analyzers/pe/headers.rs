@@ -41,7 +41,9 @@ impl Analyzer for PeHeadersAnalyzer {
     }
 
     fn run(&self, ctx: &AnalysisContext<'_>, out: &mut ReportBuilder) -> Result<(), AnalysisError> {
-        let pe = ctx.pe()?;
+        let Some(pe) = super::pe_or_skip(ctx) else {
+            return Ok(());
+        };
         let computed = checksum(&ctx.input.data, pe.checksum_offset, &ctx.deadline)?;
         let facts = header_facts(pe, computed);
 
@@ -566,7 +568,15 @@ mod tests {
         );
         let r = analyze(built.bytes);
         assert_eq!(r.errors.len(), 1);
-        assert_eq!(r.errors[0].analyzer, "pe-headers");
+        // Reported once, by pe-parse; other PE analyzers skip silently.
+        assert_eq!(r.errors[0].analyzer, "pe-parse");
+        assert!(matches!(
+            r.errors[0].error,
+            AnalysisError::LimitExceeded {
+                limit: "max_sections",
+                ..
+            }
+        ));
         assert!(r.file.hashes.is_some());
         assert!(r.facts.pe.is_none());
     }

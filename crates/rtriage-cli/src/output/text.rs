@@ -9,7 +9,7 @@ use std::io::{self, Write};
 
 use anstyle::{AnsiColor, Style};
 use rtriage_core::report::{
-    EntropyFacts, ExtractedString, StringEncoding, StringKind, StringsFacts,
+    EntropyFacts, ExtractedString, PeSectionFacts, StringEncoding, StringKind, StringsFacts,
 };
 use rtriage_core::{Evidence, Finding, Format, PeHeaderFacts, Report, RiskLevel, Severity};
 use serde::Serialize;
@@ -54,6 +54,9 @@ fn render_report(
     render_findings(&r.findings, out, p)?;
     if let Some(h) = r.facts.pe.as_ref().and_then(|pe| pe.headers.as_ref()) {
         render_pe_headers(h, out, p)?;
+    }
+    if let Some(s) = r.facts.pe.as_ref().and_then(|pe| pe.sections.as_deref()) {
+        render_pe_sections(s, out, p)?;
     }
     if let Some(e) = &r.facts.entropy {
         render_entropy(e, out, p)?;
@@ -348,6 +351,44 @@ fn render_pe_headers(h: &PeHeaderFacts, out: &mut dyn Write, p: &Painter) -> io:
     )?;
     if !h.dll_characteristics.is_empty() {
         writeln!(out, "  DLL flags    {}", h.dll_characteristics.join(", "))?;
+    }
+    Ok(())
+}
+
+fn render_pe_sections(
+    sections: &[PeSectionFacts],
+    out: &mut dyn Write,
+    p: &Painter,
+) -> io::Result<()> {
+    writeln!(out, "\n{}", p.heading("Sections"))?;
+    if sections.is_empty() {
+        return writeln!(out, "  (none)");
+    }
+    writeln!(
+        out,
+        "  {:>3}  {:<10} {:>10} {:>10} {:>10}  {:<4} {:>7}",
+        "#", "Name", "VirtAddr", "VirtSize", "RawSize", "Perm", "Entropy"
+    )?;
+    for s in sections {
+        let entropy = s
+            .entropy
+            .map_or_else(|| "-".to_owned(), |e| format!("{e:.3}"));
+        let note = if s.raw_truncated {
+            "  (raw data past EOF)"
+        } else {
+            ""
+        };
+        writeln!(
+            out,
+            "  {:>3}  {:<10} {:>10} {:>10} {:>10}  {:<4} {:>7}{note}",
+            s.index,
+            sanitize(&s.name),
+            format!("0x{:x}", s.virtual_address),
+            format!("0x{:x}", s.virtual_size),
+            format!("0x{:x}", s.raw_size),
+            s.permissions,
+            entropy,
+        )?;
     }
     Ok(())
 }

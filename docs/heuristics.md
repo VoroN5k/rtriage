@@ -140,6 +140,98 @@ share the `native` subsystem with drivers and are treated as drivers.
 **Algorithm.** Same as `CheckSumMappedFile`: 16-bit folded sum of the file
 with the 4-byte `CheckSum` field read as zero, plus the file length.
 
+### PE sections (`pe-sections` analyzer)
+
+All section findings emit **one** finding per ID with every matching section
+as evidence. Thresholds live in `Thresholds` (`config.rs`).
+
+#### `PE-SECTION-RWX`
+
+| | |
+|---|---|
+| Severity / confidence | Medium / Medium (11 points) |
+| Category | `anomaly` |
+| Trigger | Section has both `IMAGE_SCN_MEM_WRITE` and `IMAGE_SCN_MEM_EXECUTE`. |
+| Evidence | `section`, `field Characteristics = 0x… (rwx)` per section |
+
+**Rationale.** Writable code lets a program rewrite itself in place: packers,
+self-decrypting loaders, shellcode stubs.
+**False positives.** Some old compilers/linkers and legacy protectors, a few
+games and JIT-style trampolines. Modern MSVC/Clang/GCC never emit it.
+
+#### `PE-SECTION-NAME-UNUSUAL`
+
+| | |
+|---|---|
+| Severity / confidence | Info / Low (0 points) |
+| Category | `anomaly` |
+| Trigger | Name is empty, contains non-printable/non-ASCII characters, or is not in the known-name list and does not start with a known prefix. |
+| Evidence | `section` per unusual name |
+
+Known names cover the Microsoft linker (`.text`, `.rdata`, `.pdata`, `.00cfg`,
+`_RDATA`, `fothk`, ...), drivers (`INIT`, `PAGE*`), Borland/Delphi (`CODE`,
+`DATA`, `BSS`, `.itext`), MinGW/GCC (`.eh_frame`, `.CRT`, DWARF `.debug_*`,
+COFF long-name references `/<digits>`) and Go (`.symtab`). Matching is
+case-sensitive: `.TEXT` is unusual.
+**Rationale.** Packers and protectors name their sections (`UPX0`, `.aspack`,
+`.themida`). Specific packer names are reported separately by
+`PE-PACKER-KNOWN` (step 6); this finding is context only.
+**False positives.** Custom linkers and rare toolchains. Info, 0 points.
+
+#### `PE-SECTION-VIRTUAL-ONLY`
+
+| | |
+|---|---|
+| Severity / confidence | Medium / Medium (11 points) |
+| Category | `packing` |
+| Trigger | Executable section with `SizeOfRawData == 0` and `VirtualSize >= virtual_only_min_size` (default 4096). |
+| Evidence | `section`, `field VirtualSize` |
+
+**Rationale.** Memory reserved for code that is not in the file is filled at
+run time: the unpacking target of UPX-style packers (`UPX0`).
+**Not flagged.** `.bss`-style uninitialized data (not executable), and tiny
+executable stubs under one page.
+
+#### `PE-SECTION-HIGH-ENTROPY`
+
+| | |
+|---|---|
+| Severity / confidence | Medium / Medium (11 points) if any matching section is executable; otherwise Low / Low (2 points) |
+| Category | `packing` |
+| Trigger | Entropy of the section's raw data >= `entropy_high` (default 7.2). Sections with fewer than `section_entropy_min_size` (default 512) raw bytes in the file are skipped. |
+| Evidence | `section`, `metric entropy` per section |
+
+**Rationale.** Compiled code sits around 5.5–6.5 bits/byte; packed or
+encrypted code approaches 8.
+**False positives.** `.rsrc` with PNG/compressed resources, installers and
+self-extracting archives carrying compressed data in a data section: hence
+the Low/Low variant for non-executable sections. Entropy is computed over
+the bytes actually present in the file (`raw_truncated` sections are clipped
+at EOF).
+
+#### `PE-ENTRYPOINT-UNUSUAL`
+
+| Situation (first match wins) | Severity / confidence | Points |
+|---|---|---|
+| EP is 0 or below `SizeOfHeaders` and not in a section (EXE only) | Medium / High | 15 |
+| EP outside every section | Medium / High | 15 |
+| EP in a non-executable section | Medium / Medium | 11 |
+| EP in the last section, which is not the first executable section | Medium / Medium | 11 |
+| EP in an executable section other than the first one | Low / Low | 2 |
+
+| | |
+|---|---|
+| Category | `anomaly` |
+| Evidence | `field AddressOfEntryPoint`, `section` containing it (if any), `field first executable section` (if different) |
+
+**Not flagged.** DLLs with `AddressOfEntryPoint == 0` (no `DllMain`,
+resource-only DLLs). Managed .NET images (`managed_dotnet`): their entry is a
+loader stub, or 0 for PE32+ IL-only assemblies. Single-section images.
+**Rationale.** Compilers put the entry point at the start of the first code
+section's region; packer stubs usually sit in an appended last section.
+**False positives.** Some protectors used by legitimate software (DRM),
+and unusual linker layouts (Low/Low variant).
+
 ### Facts that suppress heuristics
 
 - `facts.pe.headers.managed_dotnet`: set when the CLR (COM descriptor) data

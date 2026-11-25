@@ -52,6 +52,12 @@ pub struct Thresholds {
     /// Typical values: plain code ~5.5–6.5, compressed/encrypted data 7.5–8.0.
     /// Legitimate compressed resources, installers and archives also exceed it.
     pub entropy_high: f64,
+    /// Sections with fewer raw bytes than this get no entropy value (it would
+    /// be biased low and meaningless). Default: 512.
+    pub section_entropy_min_size: usize,
+    /// Minimum `VirtualSize` for an executable section with no raw data to be
+    /// reported as `PE-SECTION-VIRTUAL-ONLY`. Default: 4096 (one page).
+    pub virtual_only_min_size: u32,
 }
 
 impl Thresholds {
@@ -69,6 +75,8 @@ impl Default for Thresholds {
         Self {
             entropy_window: Self::DEFAULT_ENTROPY_WINDOW,
             entropy_high: Self::DEFAULT_ENTROPY_HIGH,
+            section_entropy_min_size: 512,
+            virtual_only_min_size: 0x1000,
         }
     }
 }

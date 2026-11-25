@@ -26,6 +26,11 @@ PE
   Checksum     0x00001234 (MISMATCH; computed 0x00001083)
   DLL flags    high_entropy_va, dynamic_base, nx_compat, terminal_server_aware
 
+Sections
+    #  Name         VirtAddr   VirtSize    RawSize  Perm Entropy
+    0  .text          0x1000       0x40      0x200  r-x    0.544
+    1  .data          0x2000       0x20      0x200  rw-    0.000
+
 Entropy
   Whole file  0.635 bits/byte
   No high-entropy regions (>= 7.20, window 4096)

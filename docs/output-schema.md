@@ -89,6 +89,23 @@ Every member is `null` if its analyzer did not run.
 | `checksum` | object | `{ stored, computed }`. |
 | `managed_dotnet` | bool | CLR header present (managed .NET assembly). |
 
+`pe.sections`: array, one object per section table entry, in table order:
+
+| Field | Type | Description |
+|---|---|---|
+| `index` | integer | Index in the section table. |
+| `name` | string | Raw name up to the first NUL (lossy UTF-8; sanitize before display). |
+| `virtual_address`, `virtual_size` | integer | `VirtualAddress`, `VirtualSize`. |
+| `raw_offset`, `raw_size` | integer | `PointerToRawData`, `SizeOfRawData`. |
+| `characteristics_raw` | integer | Raw `Characteristics`. |
+| `permissions` | string | `rwx` with `-` for unset bits, e.g. `r-x`. |
+| `flags` | array of string | `code`, `initialized_data`, `uninitialized_data`, `discardable`, `shared`. |
+| `entropy` | number \| null | Entropy of raw data present in the file; `null` if under 512 bytes. |
+| `raw_truncated` | bool | Raw data claimed past end of file. |
+
+A PE that fails to parse produces one `errors` entry from analyzer
+`pe-parse`; the other PE analyzers then leave their facts `null`.
+
 String item: `offset` (integer), `encoding` (`ascii` \| `utf16_le`), `len`
 (characters, before truncation), `value` (raw text, JSON-escaped; **sanitize
 before displaying**), `truncated` (bool), `kinds` (array, omitted when empty).
