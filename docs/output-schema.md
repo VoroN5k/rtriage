@@ -180,6 +180,17 @@ when absent or unusable; `kind` is `PROGBITS`, `NOBITS`, `DYNSYM`, `SYMTAB`,
 `elf.section_problems`: array of strings describing why section headers
 were ignored or contradict the file/segments (empty normally).
 
+`elf.dynamic` (`null` for static files): `{ needed, soname, rpath, runpath,
+imports, exported_symbols, symbol_count_source, symbols_limit_reached,
+textrel }`. `imports` are undefined named dynamic symbols in table order;
+`symbol_count_source` is `section`, `dt_hash`, `dt_gnu_hash`, `strtab_gap`
+or `none`.
+
+`elf.checksec`: `{ pie, nx, nx_source, relro, bind_now, canary, fortify,
+stripped }`; `pie`, `canary`, `fortify` are `null` when not applicable or
+unknown; `nx_source` is `gnu_stack` or `architecture_default`; `relro` is
+`none`, `partial` or `full` (rules in `heuristics.md`).
+
 An ELF whose program headers cannot be parsed produces one `errors` entry
 from analyzer `elf-parse`; other ELF analyzers then leave their facts `null`.
 

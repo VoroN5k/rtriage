@@ -70,6 +70,56 @@ pub struct ElfFacts {
     pub sections: Option<Vec<ElfSectionFacts>>,
     /// Why section headers were (partly) ignored or look inconsistent.
     pub section_problems: Option<Vec<String>>,
+    /// Dynamic section summary; `None` for static files or on failure.
+    pub dynamic: Option<ElfDynamicFacts>,
+    /// checksec-style hardening summary.
+    pub checksec: Option<ElfChecksec>,
+}
+
+/// Dynamic linking information (from `PT_DYNAMIC`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ElfDynamicFacts {
+    /// `DT_NEEDED` libraries, in order.
+    pub needed: Vec<String>,
+    /// `DT_SONAME`.
+    pub soname: Option<String>,
+    /// `DT_RPATH` (raw attacker data).
+    pub rpath: Option<String>,
+    /// `DT_RUNPATH` (raw attacker data).
+    pub runpath: Option<String>,
+    /// Imported (undefined, named) dynamic symbols, in table order.
+    pub imports: Vec<String>,
+    /// Number of defined (exported) dynamic symbols.
+    pub exported_symbols: usize,
+    /// How the dynamic symbol count was determined: `section`, `dt_hash`,
+    /// `dt_gnu_hash`, `strtab_gap` or `none`.
+    pub symbol_count_source: &'static str,
+    /// `true` if the symbol table was cut at `max_symbols`.
+    pub symbols_limit_reached: bool,
+    /// Relocations modify the text segment (`DT_TEXTREL` / `DF_TEXTREL`).
+    pub textrel: bool,
+}
+
+/// checksec-style hardening summary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ElfChecksec {
+    /// Position independent executable; `None` for shared libraries,
+    /// relocatable objects and cores (not applicable).
+    pub pie: Option<bool>,
+    /// Non-executable stack.
+    pub nx: bool,
+    /// Where `nx` comes from: `gnu_stack` or `architecture_default` (no `PT_GNU_STACK`).
+    pub nx_source: &'static str,
+    /// `none`, `partial` (`PT_GNU_RELRO`) or `full` (`PT_GNU_RELRO` + immediate binding).
+    pub relro: &'static str,
+    /// Immediate binding (`DT_BIND_NOW`, `DF_BIND_NOW` or `DF_1_NOW`).
+    pub bind_now: bool,
+    /// Stack protector symbols present; `None` when no symbols are available.
+    pub canary: Option<bool>,
+    /// `_FORTIFY_SOURCE` `__*_chk` symbols present; `None` when no symbols are available.
+    pub fortify: Option<bool>,
+    /// No `.symtab` (only dynamic symbols, if any).
+    pub stripped: bool,
 }
 
 /// One program header.

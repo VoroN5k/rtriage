@@ -41,6 +41,7 @@ pub struct AnalysisContext<'a> {
     pe: OnceLock<Result<pe::PeImage, AnalysisError>>,
     pe_imports: OnceLock<Option<pe::imports::ParsedImports>>,
     elf: OnceLock<Result<elf::ElfImage, AnalysisError>>,
+    elf_dynamic: OnceLock<Option<Result<elf::dynamic::ElfDynamic, AnalysisError>>>,
 }
 
 impl<'a> AnalysisContext<'a> {
@@ -55,7 +56,25 @@ impl<'a> AnalysisContext<'a> {
             pe: OnceLock::new(),
             pe_imports: OnceLock::new(),
             elf: OnceLock::new(),
+            elf_dynamic: OnceLock::new(),
         }
+    }
+
+    /// Dynamic section and symbols of an ELF (see [`elf::dynamic`]).
+    /// `None` if the input is not an ELF or its headers failed to parse.
+    pub fn elf_dynamic(&self) -> Option<Result<&elf::dynamic::ElfDynamic, AnalysisError>> {
+        self.elf_dynamic
+            .get_or_init(|| {
+                let image = self.elf().ok()?;
+                Some(elf::dynamic::parse(
+                    image,
+                    &self.input.data,
+                    &self.config.limits,
+                    &self.deadline,
+                ))
+            })
+            .as_ref()
+            .map(|r| r.as_ref().map_err(Clone::clone))
     }
 
     /// Parsed ELF headers and tables. Parsed on first call, then cached.
@@ -182,6 +201,7 @@ impl Default for Registry {
             .with(elf::ElfParseAnalyzer)
             .with(elf::headers::ElfHeadersAnalyzer)
             .with(elf::segments::ElfSegmentsAnalyzer)
+            .with(elf::checksec::ElfChecksecAnalyzer)
     }
 }
 

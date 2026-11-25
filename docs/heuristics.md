@@ -647,6 +647,41 @@ embedding compressed assets. Missing sections: deliberately minimised
 embedded firmware. Relocatable objects and core files are not judged.
 Confirmed UPX will explain these (M3 step 6).
 
+### ELF dynamic linking and hardening (`elf-dynamic` analyzer)
+
+The dynamic section is found through `PT_DYNAMIC` and every address is
+mapped through `PT_LOAD` (works without section headers). The dynamic
+symbol count comes from, in order: the `.dynsym` section header (if its
+address matches `DT_SYMTAB`), `DT_HASH` `nchain`, `DT_GNU_HASH` (highest
+bucket, then its chain to the end bit), or the `DT_SYMTAB`..`DT_STRTAB`
+gap; `facts.elf.dynamic.symbol_count_source` says which.
+
+**checksec summary (`facts.elf.checksec`):**
+
+| Field | Rule |
+|---|---|
+| `pie` | `EXEC` → `false`; `DYN` with `PT_INTERP` or `DF_1_PIE` → `true`; other `DYN` (shared libraries), `REL`, `CORE` → `null`. |
+| `nx` | `PT_GNU_STACK` without `PF_X`. Without `PT_GNU_STACK`: executable on x86, x86-64, MIPS, PPC32, ARM32, SPARC (kernel default), non-executable elsewhere; `nx_source` says which. |
+| `relro` | `none` without `PT_GNU_RELRO`; `full` with it plus immediate binding (`DT_BIND_NOW`, `DF_BIND_NOW` or `DF_1_NOW`), or with it in a static file (no lazy binding); else `partial`. |
+| `canary` | Any of `__stack_chk_fail`, `__stack_chk_guard`, `__stack_chk_fail_local` among dynamic or static symbols; `null` if there are no symbols at all. |
+| `fortify` | Any `__*_chk` symbol other than `__stack_chk*`; `null` without symbols. |
+| `stripped` | No `.symtab` section. |
+
+| ID | Sev / Conf | Points | Category | ATT&CK | Trigger |
+|---|---|---|---|---|---|
+| `ELF-HARDENING-EXEC-STACK` | Low / Medium | 4 | `hardening` | | `EXEC`/`DYN` with `nx == false` (RWX `PT_GNU_STACK`, or none on an executable-stack-by-default architecture). |
+| `ELF-HARDENING-NO-PIE` | Low / Low | 2 | `hardening` | | `pie == false` (an `EXEC`). |
+| `ELF-HARDENING-NO-RELRO` | Low / Low | 2 | `hardening` | | `EXEC`/`DYN` **with `PT_DYNAMIC`** and `relro == none`. Partial RELRO is not flagged; static files are not judged (no GOT to protect). |
+| `ELF-RPATH-UNSAFE` | Medium / Low | 6 | `anomaly` | T1574.006 | A `DT_RPATH`/`DT_RUNPATH` component that is empty, `.`, relative, contains `..`, or is in `/tmp`, `/var/tmp`, `/dev/shm`, `/run/user`. **`$ORIGIN` / `${ORIGIN}` components are never flagged.** Evidence: one field per bad component. |
+
+**Rationale.** Hardening gaps make exploitation easier; they say little
+about intent, hence Low and the `hardening` cap of 10 points in total. A
+search path an attacker can write to lets them plant a library that runs in
+the process (library hijacking).
+**False positives.** No PIE / RELRO: Go and other static toolchains, old
+embedded builds. Exec stack: code using nested-function trampolines. RPATH:
+build-tree paths accidentally left in development builds.
+
 ### Facts that suppress heuristics
 
 - `facts.pe.headers.managed_dotnet`: set when the CLR (COM descriptor) data

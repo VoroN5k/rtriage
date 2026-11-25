@@ -17,6 +17,8 @@ analyzer. This document lists the defences and where they live.
 | `max_exports` | 65 536 | `NumberOfFunctions` and `NumberOfNames` are each capped; every export array must map contiguously into one section. |
 | `max_resources` | 4096 | Resource leaves. The walk is fixed at depth 3 and visits each directory offset once, so cycles and shared subdirectories cannot loop or multiply work. |
 | `max_certificates` | 16 | `WIN_CERTIFICATE` entries; zero or oversized lengths stop the walk. |
+| `max_dynamic_entries` | 4096 | ELF `PT_DYNAMIC` entries (reading stops at `DT_NULL`). |
+| `max_symbols` | 200 000 | ELF symbols per table. Counts derived from `DT_HASH` / `DT_GNU_HASH` are capped here, and reading stops at EOF; `DT_GNU_HASH` bucket/bloom counts above 2^20 are ignored and chain walks consume budget steps. |
 
 The Rich header search is limited to the first 4 KiB, whatever `e_lfanew`
 claims.

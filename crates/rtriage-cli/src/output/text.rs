@@ -74,6 +74,7 @@ fn render_report(
         render_elf_headers(h, out, p)?;
     }
     if let Some(elf) = &r.facts.elf {
+        render_elf_dynamic(elf, out)?;
         render_elf_layout(elf, out, p)?;
     }
     if let Some(s) = r.facts.pe.as_ref().and_then(|pe| pe.sections.as_deref()) {
@@ -592,6 +593,65 @@ fn render_elf_headers(h: &ElfHeaderFacts, out: &mut dyn Write, p: &Painter) -> i
         "  Headers      {} segments, {} sections",
         h.number_of_segments, h.number_of_sections
     )
+}
+
+/// Dynamic imports listed before "+N more".
+const ELF_IMPORTS_SHOWN: usize = 12;
+
+/// Hardening and dynamic-linking lines, appended to the ELF block.
+fn render_elf_dynamic(elf: &ElfFacts, out: &mut dyn Write) -> io::Result<()> {
+    let yes_no = |b: bool| if b { "yes" } else { "no" };
+    let opt = |b: Option<bool>| b.map_or("n/a", |v| if v { "yes" } else { "no" });
+    if let Some(c) = &elf.checksec {
+        writeln!(
+            out,
+            "  Hardening    PIE {} | NX {}{} | RELRO {} | BIND_NOW {} | canary {} | FORTIFY {} | stripped {}",
+            opt(c.pie),
+            yes_no(c.nx),
+            if c.nx_source == "architecture_default" { " (no PT_GNU_STACK)" } else { "" },
+            c.relro,
+            yes_no(c.bind_now),
+            opt(c.canary),
+            opt(c.fortify),
+            yes_no(c.stripped)
+        )?;
+    }
+    if let Some(d) = &elf.dynamic {
+        if !d.needed.is_empty() {
+            let needed: Vec<String> = d.needed.iter().map(|n| sanitize(n).into_owned()).collect();
+            writeln!(out, "  Needed       {}", needed.join(", "))?;
+        }
+        for (label, value) in [("RPATH  ", &d.rpath), ("RUNPATH", &d.runpath)] {
+            if let Some(v) = value {
+                writeln!(out, "  {label}      {}", sanitize(v))?;
+            }
+        }
+        let shown: Vec<String> = d
+            .imports
+            .iter()
+            .take(ELF_IMPORTS_SHOWN)
+            .map(|n| sanitize(n).into_owned())
+            .collect();
+        let more = d.imports.len().saturating_sub(ELF_IMPORTS_SHOWN);
+        writeln!(
+            out,
+            "  Imports      {} via {}{}: {}{}",
+            d.imports.len(),
+            d.symbol_count_source,
+            if d.symbols_limit_reached {
+                ", limit reached"
+            } else {
+                ""
+            },
+            shown.join(", "),
+            if more > 0 {
+                format!(", +{more} more")
+            } else {
+                String::new()
+            }
+        )?;
+    }
+    Ok(())
 }
 
 /// ELF sections listed before "+N more".
