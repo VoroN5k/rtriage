@@ -15,4 +15,5 @@
 )]
 #![warn(missing_docs)]
 
+pub mod elf;
 pub mod pe;
