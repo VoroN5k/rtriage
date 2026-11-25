@@ -1,0 +1,70 @@
+---
+source: crates/rtriage-cli/src/output/json.rs
+expression: "serde_json::to_string_pretty(&v).unwrap()"
+---
+{
+  "failures": [
+    {
+      "error": "cannot read missing.bin: not found",
+      "path": "missing.bin"
+    }
+  ],
+  "reports": [
+    {
+      "errors": [],
+      "facts": {
+        "entropy": {
+          "high_regions": [
+            {
+              "entropy": 7.998200776544061,
+              "len": 4096,
+              "offset": 0
+            }
+          ],
+          "high_threshold": 7.2,
+          "whole_file": 7.997997363186905,
+          "window": 4096
+        },
+        "strings": {
+          "items": [
+            {
+              "encoding": "ascii",
+              "kinds": [
+                "url",
+                "domain"
+              ],
+              "len": 29,
+              "offset": 16,
+              "truncated": false,
+              "value": "http://c2.example.ru/gate.php"
+            }
+          ],
+          "items_included": "classified",
+          "limit_reached": false,
+          "min_len": 5,
+          "total": 19
+        }
+      },
+      "file": {
+        "format": "unknown",
+        "hashes": {
+          "md5": "6a467d01257ef9873aacc48a037e0306",
+          "sha1": "ba56adcd27ad5473493b480da1976ceb9c053365",
+          "sha256": "161b72a2659e54bfcfefedce3b9ab8d2b95c7afc574d83a9117ce44d83b50ccb"
+        },
+        "path": "sample.bin",
+        "size": 4158
+      },
+      "findings": [],
+      "risk": {
+        "level": "clean_looking",
+        "score": 0
+      }
+    }
+  ],
+  "schema_version": 1,
+  "tool": {
+    "name": "rtriage",
+    "version": "[version]"
+  }
+}

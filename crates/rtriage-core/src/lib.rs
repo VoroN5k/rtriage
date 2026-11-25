@@ -25,7 +25,7 @@ pub use input::{load, sniff_format, Input};
 pub use limits::Limits;
 pub use report::{
     Category, Confidence, Evidence, Facts, FileInfo, Finding, Format, Hashes, Report,
-    ReportBuilder, Risk, RiskLevel, Severity,
+    ReportBuilder, Risk, RiskLevel, Severity, StringsIncluded,
 };
 
 /// Crate version, as recorded in `Cargo.toml`.

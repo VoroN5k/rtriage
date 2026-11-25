@@ -1,0 +1,98 @@
+//! Command-line arguments.
+
+use std::num::NonZeroUsize;
+use std::path::PathBuf;
+
+use clap::{ArgAction, Parser, ValueEnum};
+
+/// Fast static malware triage for PE and ELF binaries.
+///
+/// Never executes, loads or emulates the files it analyzes.
+#[derive(Debug, Parser)]
+#[command(name = "rtriage", version, about, long_about = None)]
+pub struct Cli {
+    /// Files to triage.
+    #[arg(required = true, value_name = "FILE")]
+    pub files: Vec<PathBuf>,
+
+    /// Output format.
+    #[arg(short = 'f', long, value_enum, default_value_t = OutputFormat::Json)]
+    pub format: OutputFormat,
+
+    /// Write the report to PATH instead of stdout.
+    #[arg(short, long, value_name = "PATH")]
+    pub output: Option<PathBuf>,
+
+    /// Minimum string length, in characters.
+    #[arg(long, value_name = "N", default_value = "5")]
+    pub strings_min: NonZeroUsize,
+
+    /// Include every extracted string, not only classified ones (URLs, IPs, paths, ...).
+    #[arg(long)]
+    pub all_strings: bool,
+
+    /// Maximum file size to analyze, in bytes [default: 536870912 (512 MiB)].
+    #[arg(long, value_name = "BYTES")]
+    pub max_size: Option<u64>,
+
+    /// Disable colored output (NO_COLOR is honored too).
+    #[arg(long)]
+    pub no_color: bool,
+
+    /// More diagnostics on stderr (-v info, -vv debug, -vvv trace).
+    #[arg(short, long, action = ArgAction::Count, conflicts_with = "quiet")]
+    pub verbose: u8,
+
+    /// Only print errors on stderr.
+    #[arg(short, long)]
+    pub quiet: bool,
+}
+
+/// Report output format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum OutputFormat {
+    /// Versioned JSON (see docs/output-schema.md).
+    Json,
+}
+
+impl Cli {
+    /// `true` unless `--no-color` or a non-empty `NO_COLOR` is set.
+    pub fn color_allowed(&self) -> bool {
+        !self.no_color && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn cli_definition_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn defaults() {
+        let cli = Cli::try_parse_from(["rtriage", "a.exe"]).unwrap();
+        assert_eq!(cli.format, OutputFormat::Json);
+        assert_eq!(cli.strings_min.get(), 5);
+        assert!(!cli.all_strings);
+        assert_eq!(cli.max_size, None);
+    }
+
+    #[test]
+    fn requires_a_file() {
+        assert!(Cli::try_parse_from(["rtriage"]).is_err());
+    }
+
+    #[test]
+    fn rejects_zero_strings_min() {
+        assert!(Cli::try_parse_from(["rtriage", "--strings-min", "0", "a"]).is_err());
+    }
+
+    #[test]
+    fn quiet_conflicts_with_verbose() {
+        assert!(Cli::try_parse_from(["rtriage", "-q", "-v", "a"]).is_err());
+    }
+}

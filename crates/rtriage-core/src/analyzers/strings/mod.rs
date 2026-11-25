@@ -16,7 +16,9 @@ pub mod classify;
 
 use super::{AnalysisContext, Analyzer};
 use crate::error::AnalysisError;
-use crate::report::{ExtractedString, Format, ReportBuilder, StringEncoding, StringsFacts};
+use crate::report::{
+    ExtractedString, Format, ReportBuilder, StringEncoding, StringsFacts, StringsIncluded,
+};
 
 /// Records [`StringsFacts`] for every input, regardless of format.
 #[derive(Debug, Clone, Copy, Default)]
@@ -135,6 +137,7 @@ impl Collector {
             min_len: to_u64(self.opts.min_len),
             limit_reached: self.total > to_u64(self.items.len()),
             total: self.total,
+            items_included: StringsIncluded::All,
             items: self.items,
         }
     }

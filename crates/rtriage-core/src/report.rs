@@ -64,8 +64,29 @@ pub struct StringsFacts {
     pub total: u64,
     /// `true` if `total` exceeded `max_strings` and `items` was capped.
     pub limit_reached: bool,
+    /// Which strings `items` contains.
+    pub items_included: StringsIncluded,
     /// Extracted strings sorted by offset (at most `max_strings`).
     pub items: Vec<ExtractedString>,
+}
+
+impl StringsFacts {
+    /// Drops strings without any [`StringKind`] and marks the list as classified-only.
+    pub fn retain_classified(&mut self) {
+        self.items.retain(|s| !s.kinds.is_empty());
+        self.items_included = StringsIncluded::Classified;
+    }
+}
+
+/// Which extracted strings a [`StringsFacts::items`] list holds.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StringsIncluded {
+    /// Every extracted string (up to `max_strings`).
+    #[default]
+    All,
+    /// Only strings with at least one [`StringKind`].
+    Classified,
 }
 
 /// One string found in the file. `value` is raw attacker data: sanitize before display.
