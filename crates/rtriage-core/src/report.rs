@@ -64,6 +64,57 @@ pub struct Facts {
 pub struct ElfFacts {
     /// ELF header summary.
     pub headers: Option<ElfHeaderFacts>,
+    /// Program headers with `PT_LOAD` entropy.
+    pub segments: Option<Vec<ElfSegmentFacts>>,
+    /// Section headers (empty when absent or unusable).
+    pub sections: Option<Vec<ElfSectionFacts>>,
+    /// Why section headers were (partly) ignored or look inconsistent.
+    pub section_problems: Option<Vec<String>>,
+}
+
+/// One program header.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ElfSegmentFacts {
+    /// Index in the program header table.
+    pub index: usize,
+    /// Type name (`LOAD`, `DYNAMIC`, `GNU_STACK`, ... or `0x...`).
+    pub kind: String,
+    /// Raw `p_type`.
+    pub kind_raw: u32,
+    /// `rwx` with `-` for unset bits.
+    pub permissions: String,
+    /// `p_offset`.
+    pub offset: u64,
+    /// `p_vaddr`.
+    pub vaddr: u64,
+    /// `p_filesz`.
+    pub filesz: u64,
+    /// `p_memsz`.
+    pub memsz: u64,
+    /// Entropy of the file bytes of a `PT_LOAD`; `None` for other types or
+    /// fewer than `section_entropy_min_size` bytes.
+    pub entropy: Option<f64>,
+    /// `p_offset + p_filesz` runs past end of file.
+    pub truncated: bool,
+}
+
+/// One section header.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ElfSectionFacts {
+    /// Index in the section header table.
+    pub index: usize,
+    /// Name (raw attacker data: sanitize before display).
+    pub name: String,
+    /// Type name (`PROGBITS`, `NOBITS`, `DYNSYM`, ... or `0x...`).
+    pub kind: String,
+    /// `sh_flags` names: `write`, `alloc`, `exec`, ...
+    pub flags: Vec<&'static str>,
+    /// `sh_addr`.
+    pub addr: u64,
+    /// `sh_offset`.
+    pub offset: u64,
+    /// `sh_size`.
+    pub size: u64,
 }
 
 /// Summary of the ELF header.

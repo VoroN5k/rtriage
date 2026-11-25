@@ -12,6 +12,7 @@
 //! [`guarded`]. Dynamic section, symbols and notes get own bounded parsers.
 
 pub mod headers;
+pub mod segments;
 
 use crate::analyzers::pe::guarded;
 use crate::analyzers::{AnalysisContext, Analyzer};

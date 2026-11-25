@@ -181,6 +181,7 @@ impl Default for Registry {
             .with(pe::authenticode::PeSignatureAnalyzer)
             .with(elf::ElfParseAnalyzer)
             .with(elf::headers::ElfHeadersAnalyzer)
+            .with(elf::segments::ElfSegmentsAnalyzer)
     }
 }
 

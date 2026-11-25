@@ -628,6 +628,25 @@ control of the process; a loader in a writable location is a hijack point.
 **False positives.** Vendor toolchains and embedded SDKs shipping their own
 loader under `/opt` (Medium/Medium variant).
 
+### ELF segments and sections (`elf-segments` analyzer)
+
+| ID | Sev / Conf | Points | Category | Trigger |
+|---|---|---|---|---|
+| `ELF-SEGMENT-RWX` | Medium / Medium; **Low / Low on MIPS, 32-bit PowerPC, ARM32** | 11 / 2 | `anomaly` | A `PT_LOAD` with both `PF_W` and `PF_X`. Evidence: `field segment` per segment. |
+| `ELF-SEGMENT-HIGH-ENTROPY` | Medium / Medium if any matching segment is executable, else Low / Low | 11 / 2 | `packing` | Entropy of a `PT_LOAD`'s file bytes (`p_filesz`, clipped at EOF, at least `section_entropy_min_size`) >= `entropy_high`. Evidence: `field segment`, `metric entropy`. |
+| `ELF-SECTIONS-MISSING` | Low / Medium | 4 | `anomaly` | `EXEC`/`DYN` with no section header table (`e_shoff == 0`) and no section problems. Evidence: `field e_shoff`. |
+| `ELF-SECTIONS-INCONSISTENT` | Low / Low | 2 | `anomaly` | `EXEC`/`DYN` with section problems: any recorded by the parser (wrong `e_shentsize`, table past EOF, too many sections, unreadable `e_shstrndx`, `e_shnum` without `e_shoff`), a non-`NOBITS` section past EOF, or an `SHF_ALLOC` section whose address is in no `PT_LOAD`. Evidence: up to 8 `field problem`. |
+
+**Rationale.** RWX segments let code rewrite itself; modern linkers never
+emit them. Section headers are irrelevant to the loader, so removing or
+corrupting them only hurts analysis tools: sstrip-style tools, packers and
+hand-made binaries do it on purpose. Plain `strip` keeps the table.
+**False positives.** RWX: legacy toolchains on MIPS, PPC32 (BSS-PLT) and
+ARM32 (hence the lower level there), some JIT runtimes. Entropy: binaries
+embedding compressed assets. Missing sections: deliberately minimised
+embedded firmware. Relocatable objects and core files are not judged.
+Confirmed UPX will explain these (M3 step 6).
+
 ### Facts that suppress heuristics
 
 - `facts.pe.headers.managed_dotnet`: set when the CLR (COM descriptor) data

@@ -166,6 +166,20 @@ verified**: no hash or certificate chain check.
 | `number_of_segments` / `number_of_sections` | integer | Program headers; usable section headers (0 if absent or ignored). |
 | `flags` | integer | Raw `e_flags`. |
 
+`elf.segments`: `[{ index, kind, kind_raw, permissions, offset, vaddr,
+filesz, memsz, entropy, truncated }]`; `kind` is `LOAD`, `DYNAMIC`,
+`INTERP`, `NOTE`, `PHDR`, `TLS`, `GNU_STACK`, `GNU_RELRO`, `GNU_EH_FRAME`,
+`GNU_PROPERTY` or `0x...`; `entropy` only for `PT_LOAD` (>= 512 file bytes).
+
+`elf.sections`: `[{ index, name, kind, flags, addr, offset, size }]`, empty
+when absent or unusable; `kind` is `PROGBITS`, `NOBITS`, `DYNSYM`, `SYMTAB`,
+`STRTAB`, `DYNAMIC`, `NOTE`, `GNU_HASH`, ... or `0x...`; `flags` from
+`write`, `alloc`, `exec`, `merge`, `strings`, `info_link`, `group`, `tls`,
+`compressed`.
+
+`elf.section_problems`: array of strings describing why section headers
+were ignored or contradict the file/segments (empty normally).
+
 An ELF whose program headers cannot be parsed produces one `errors` entry
 from analyzer `elf-parse`; other ELF analyzers then leave their facts `null`.
 

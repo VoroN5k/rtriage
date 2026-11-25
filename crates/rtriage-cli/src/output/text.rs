@@ -9,7 +9,8 @@ use std::io::{self, Write};
 
 use anstyle::{AnsiColor, Style};
 use rtriage_core::report::{
-    AnalysisLimit, ElfHeaderFacts, PeExportsFacts, PeResourcesFacts, Reduction, SignatureStatus,
+    AnalysisLimit, ElfFacts, ElfHeaderFacts, PeExportsFacts, PeResourcesFacts, Reduction,
+    SignatureStatus,
 };
 use rtriage_core::report::{
     EntropyFacts, ExtractedString, PeImportsFacts, PeSectionFacts, StringEncoding, StringKind,
@@ -71,6 +72,9 @@ fn render_report(
     }
     if let Some(h) = r.facts.elf.as_ref().and_then(|e| e.headers.as_ref()) {
         render_elf_headers(h, out, p)?;
+    }
+    if let Some(elf) = &r.facts.elf {
+        render_elf_layout(elf, out, p)?;
     }
     if let Some(s) = r.facts.pe.as_ref().and_then(|pe| pe.sections.as_deref()) {
         render_pe_sections(s, out, p)?;
@@ -588,6 +592,64 @@ fn render_elf_headers(h: &ElfHeaderFacts, out: &mut dyn Write, p: &Painter) -> i
         "  Headers      {} segments, {} sections",
         h.number_of_segments, h.number_of_sections
     )
+}
+
+/// ELF sections listed before "+N more".
+const ELF_SECTIONS_SHOWN: usize = 40;
+
+fn render_elf_layout(elf: &ElfFacts, out: &mut dyn Write, p: &Painter) -> io::Result<()> {
+    if let Some(segs) = &elf.segments {
+        writeln!(out, "\n{}", p.heading("Segments"))?;
+        writeln!(
+            out,
+            "  {:>3}  {:<13} {:<4} {:>10} {:>18} {:>10} {:>10} {:>7}",
+            "#", "Type", "Perm", "Offset", "VirtAddr", "FileSize", "MemSize", "Entropy"
+        )?;
+        for s in segs {
+            let entropy = s
+                .entropy
+                .map_or_else(|| "-".to_owned(), |e| format!("{e:.3}"));
+            let note = if s.truncated { "  (past EOF)" } else { "" };
+            writeln!(
+                out,
+                "  {:>3}  {:<13} {:<4} {:>10} {:>18} {:>10} {:>10} {:>7}{note}",
+                s.index,
+                s.kind,
+                s.permissions,
+                format!("0x{:x}", s.offset),
+                format!("0x{:x}", s.vaddr),
+                format!("0x{:x}", s.filesz),
+                format!("0x{:x}", s.memsz),
+                entropy
+            )?;
+        }
+    }
+    if let Some(secs) = &elf.sections {
+        if secs.is_empty() {
+            writeln!(out, "\n{}  (none)", p.heading("Sections"))?;
+        } else {
+            writeln!(out, "\n{}  {} entries", p.heading("Sections"), secs.len())?;
+            for s in secs.iter().skip(1).take(ELF_SECTIONS_SHOWN) {
+                let line = format!(
+                    "  {:>3}  {:<20} {:<12} {:>18} {:>10}  {}",
+                    s.index,
+                    sanitize(&s.name),
+                    s.kind,
+                    format!("0x{:x}", s.addr),
+                    format!("0x{:x}", s.size),
+                    s.flags.join(",")
+                );
+                writeln!(out, "{}", line.trim_end())?;
+            }
+            if secs.len() > ELF_SECTIONS_SHOWN + 1 {
+                writeln!(out, "  +{} more", secs.len() - ELF_SECTIONS_SHOWN - 1)?;
+            }
+        }
+    }
+    for problem in elf.section_problems.iter().flatten() {
+        writeln!(out, "  ! {}", sanitize(problem))?;
+    }
+    Ok(())
 }
 
 /// Exports listed before "+N more".
