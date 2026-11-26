@@ -4,6 +4,7 @@
 mod findings;
 mod help;
 mod imports;
+mod iocs;
 mod loading;
 mod sections;
 mod strings;
@@ -189,6 +190,7 @@ fn ready(app: &App, report: &Report, frame: &mut Frame<'_>, area: Rect) {
         Tab::Sections => sections::draw(app, report, frame, body),
         Tab::Imports => imports::draw(app, report, frame, body),
         Tab::Strings => strings::draw(app, report, frame, body),
+        Tab::Iocs => iocs::draw(app, report, frame, body),
         _ => {
             let block = Block::new()
                 .borders(Borders::ALL)

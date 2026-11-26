@@ -72,6 +72,7 @@ pub(super) fn draw(app: &App, report: &Report, frame: &mut Frame<'_>, area: Rect
         title,
         header: &COLUMNS,
         widths: &widths,
+        highlight: true,
         empty,
     };
     table::draw(frame, area, &spec, &p.strings, &|row| {

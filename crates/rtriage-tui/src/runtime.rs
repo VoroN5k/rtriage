@@ -7,7 +7,7 @@
 //! it). The terminal is restored on every exit path, including a panic on
 //! the UI thread.
 
-use std::io::{self, IsTerminal, Stdout};
+use std::io::{self, IsTerminal, Stdout, Write};
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
@@ -25,6 +25,7 @@ use ratatui::Terminal;
 use rtriage_core::{CancelToken, Config, Deadline, Input, Registry, Report};
 
 use crate::app::{App, Phase};
+use crate::copy::{osc52, Mux};
 use crate::msg::{from_event, Cmd, Msg};
 use crate::update::update;
 use crate::view::view;
@@ -134,6 +135,7 @@ fn event_loop(
             for cmd in update(app, msg) {
                 match cmd {
                     Cmd::Cancel => token.cancel(),
+                    Cmd::Copy(payload) => write_clipboard(&payload)?,
                     Cmd::Quit => return Ok(()),
                 }
             }
@@ -198,4 +200,22 @@ fn install_panic_hook() {
         }
         previous(info);
     }));
+}
+
+/// Sends `payload` to the terminal clipboard. A payload over the limit was
+/// already refused by `update`; it is silently dropped here if it gets
+/// through anyway.
+fn write_clipboard(payload: &str) -> io::Result<()> {
+    // GNU screen needs DCS passthrough; tmux takes the plain sequence.
+    let mux = if std::env::var_os("STY").is_some() && std::env::var_os("TMUX").is_none() {
+        Mux::Screen
+    } else {
+        Mux::None
+    };
+    let Ok(seq) = osc52(payload, mux) else {
+        return Ok(());
+    };
+    let mut out = io::stdout();
+    out.write_all(seq.as_bytes())?;
+    out.flush()
 }

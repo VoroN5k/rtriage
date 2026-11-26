@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 
 mod app;
+mod copy;
 mod filter;
 mod jump;
 mod list;
@@ -23,7 +24,8 @@ mod testkit;
 mod update;
 mod view;
 
-pub use app::{is_partial, App, Focus, Panes, Phase, Tab, MIN_SIZE};
+pub use app::{is_partial, App, Focus, Panes, PendingCopy, Phase, Tab, MIN_SIZE};
+pub use copy::{osc52, CopyError, Mux, OSC52_LIMIT};
 pub use filter::{FilterDialog, StringFilter};
 pub use jump::{History, Location, RangeInfo, Target, RANGE_ENTROPY_CAP};
 pub use list::ListState;

@@ -39,6 +39,7 @@ pub(super) fn draw(app: &App, report: &Report, frame: &mut Frame<'_>, area: Rect
         title,
         header,
         widths,
+        highlight: true,
         empty: "No imports.".into(),
     };
     table::draw(frame, area, &spec, &app.panes.imports, &|r| {

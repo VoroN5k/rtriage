@@ -8,7 +8,7 @@ use ratatui::Frame;
 use super::centered;
 
 /// Key, description. Grows as later steps add keys.
-const KEYS: [(&str, &str); 15] = [
+const KEYS: [(&str, &str); 17] = [
     ("1-6", "switch tab"),
     ("Tab / Shift-Tab", "next / previous tab"),
     ("↑↓ j k", "move"),
@@ -25,6 +25,8 @@ const KEYS: [(&str, &str); 15] = [
         "f / x",
         "Strings: filter by class and length / clear filter",
     ),
+    ("d", "IOCs: show raw / defanged values"),
+    ("y / Y", "copy sanitized+defanged / copy raw (asks first)"),
     ("?", "toggle this help"),
     (
         "Esc",

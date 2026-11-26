@@ -3,7 +3,8 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{App, Focus, Panes, Phase, Tab};
+use crate::app::{App, Focus, Panes, PendingCopy, Phase, Tab};
+use crate::copy::{self, OSC52_LIMIT};
 use crate::filter::{self, FilterDialog, StringFilter};
 use crate::jump::{self, Location, Target};
 use crate::list::ListState;
@@ -29,6 +30,7 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
                 findings: ListState::new(report.findings.len()),
                 sections: ListState::new(model::section_count(&report)),
                 segments: ListState::new(rows::segment_count(&report)),
+                iocs: ListState::new(rows::ioc_count(&report)),
                 imports: ListState::new(model::import_rows(&report).len()),
                 string_rows: report
                     .facts
@@ -56,6 +58,9 @@ fn on_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
     if ctrl_c {
         return quit(app);
     }
+    if let Some(pending) = app.confirm.take() {
+        return confirm_key(app, key.code, pending);
+    }
     if app.filter_dialog.is_some() {
         dialog_key(app, key.code);
         return Vec::new();
@@ -81,6 +86,9 @@ fn on_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
         KeyCode::Char('N') => search_step(app, Direction::Previous),
         KeyCode::Char('s') if app.tab == Tab::Sections => toggle_segments(app),
         KeyCode::Char('f') if app.tab == Tab::Strings => open_filter_dialog(app),
+        KeyCode::Char('d') if app.tab == Tab::Iocs => app.panes.raw_iocs = !app.panes.raw_iocs,
+        KeyCode::Char('y') => return copy(app, false),
+        KeyCode::Char('Y') => return copy(app, true),
         KeyCode::Char('x') if app.tab == Tab::Strings => clear_string_filter(app),
         KeyCode::Tab => app.tab = app.tab.cycle(1),
         KeyCode::BackTab => app.tab = app.tab.cycle(-1),
@@ -95,6 +103,55 @@ fn on_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
         code => navigate(app, code),
     }
     Vec::new()
+}
+
+/// `y` copies the safe form; `Y` the raw value after a confirmation (our
+/// own hashes need none).
+fn copy(app: &mut App, raw: bool) -> Vec<Cmd> {
+    let Some(target) = copy::target(app) else {
+        app.status = Some("nothing to copy here".into());
+        return Vec::new();
+    };
+    if target.verbatim {
+        return send_copy(app, target.safe, &target.label, "as is");
+    }
+    if !raw {
+        return send_copy(app, target.safe, &target.label, "sanitized");
+    }
+    app.status = Some(format!(
+        "copy RAW {} ({} B) as found in the file? It may hold control characters. y = copy, any other key = cancel",
+        target.label,
+        target.raw.len()
+    ));
+    app.confirm = Some(PendingCopy {
+        payload: target.raw,
+        label: target.label,
+    });
+    Vec::new()
+}
+
+/// The key after `Y`: only `y` confirms.
+fn confirm_key(app: &mut App, code: KeyCode, pending: PendingCopy) -> Vec<Cmd> {
+    if code == KeyCode::Char('y') {
+        send_copy(app, pending.payload, &pending.label, "raw")
+    } else {
+        app.status = Some("raw copy cancelled".into());
+        Vec::new()
+    }
+}
+
+fn send_copy(app: &mut App, payload: String, label: &str, mode: &str) -> Vec<Cmd> {
+    let len = payload.len();
+    if len > OSC52_LIMIT {
+        app.status = Some(format!(
+            "not copied: {label} is {len} B, which exceeds 64 KiB (the OSC 52 limit)"
+        ));
+        return Vec::new();
+    }
+    app.status = Some(format!(
+        "copied {label} ({mode}, {len} B) via OSC 52, if your terminal allows it"
+    ));
+    vec![Cmd::Copy(payload)]
 }
 
 fn open_prompt(app: &mut App) {
@@ -1242,5 +1299,165 @@ mod strings_tests {
         update(&mut a, key(KeyCode::Char('2')));
         update(&mut a, key(KeyCode::Char('f')));
         assert!(a.filter_dialog.is_none());
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod copy_tests {
+    use ratatui::crossterm::event::KeyCode;
+
+    use super::*;
+    use crate::app::{Focus, Tab};
+    use crate::copy::OSC52_LIMIT;
+    use crate::testkit::{key, ready_app, string, strings_app, suspicious_pe};
+
+    fn iocs_app() -> App {
+        let mut a = ready_app("s.exe", suspicious_pe(), (100, 30));
+        update(&mut a, key(KeyCode::Char('5')));
+        a
+    }
+
+    /// Moves the IOCs cursor to the first row whose kind cell is `kind`.
+    fn select_ioc(a: &mut App, kind: &str) {
+        let r = a.report().unwrap();
+        let row = (0..rows::ioc_count(r))
+            .position(|i| rows::ioc(r, i, false).unwrap()[0] == kind)
+            .unwrap();
+        a.panes.iocs.select(row);
+    }
+
+    fn copied(cmds: &[Cmd]) -> &str {
+        match cmds {
+            [Cmd::Copy(p)] => p,
+            other => panic!("expected one copy, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn iocs_list_hashes_then_indicators() {
+        let a = iocs_app();
+        let r = a.report().unwrap();
+        assert_eq!(a.panes.iocs.len(), rows::ioc_count(r));
+        assert_eq!(rows::ioc(r, 0, false).unwrap()[0], "md5");
+        assert_eq!(rows::ioc(r, 2, false).unwrap()[0], "sha256");
+        assert!(a.panes.iocs.len() > 3);
+    }
+
+    #[test]
+    fn d_toggles_defanged_display() {
+        let mut a = iocs_app();
+        assert!(!a.panes.raw_iocs, "defanged by default");
+        update(&mut a, key(KeyCode::Char('d')));
+        assert!(a.panes.raw_iocs);
+        update(&mut a, key(KeyCode::Char('d')));
+        assert!(!a.panes.raw_iocs);
+    }
+
+    #[test]
+    fn y_copies_the_defanged_ioc() {
+        let mut a = iocs_app();
+        select_ioc(&mut a, "url");
+        let cmds = update(&mut a, key(KeyCode::Char('y')));
+        assert_eq!(copied(&cmds), "hxxp://c2[.]evil-example[.]ru/gate.php");
+        let status = a.status.clone().unwrap();
+        assert!(
+            status.contains("copied url IOC (sanitized, 38 B) via OSC 52"),
+            "{status}"
+        );
+        // The display mode does not change what `y` copies.
+        update(&mut a, key(KeyCode::Char('d')));
+        let cmds = update(&mut a, key(KeyCode::Char('y')));
+        assert_eq!(copied(&cmds), "hxxp://c2[.]evil-example[.]ru/gate.php");
+    }
+
+    #[test]
+    fn shift_y_asks_then_copies_raw() {
+        let mut a = iocs_app();
+        select_ioc(&mut a, "url");
+        assert!(update(&mut a, key(KeyCode::Char('Y'))).is_empty());
+        assert!(a.confirm.is_some());
+        assert!(a.status.clone().unwrap().contains("RAW"));
+        let cmds = update(&mut a, key(KeyCode::Char('y')));
+        assert_eq!(copied(&cmds), "http://c2.evil-example.ru/gate.php");
+        assert!(a.confirm.is_none());
+        assert!(a.status.clone().unwrap().contains("(raw, 34 B)"));
+    }
+
+    #[test]
+    fn raw_copy_is_cancelled_by_any_other_key() {
+        let mut a = iocs_app();
+        select_ioc(&mut a, "url");
+        update(&mut a, key(KeyCode::Char('Y')));
+        assert!(
+            update(&mut a, key(KeyCode::Char('q'))).is_empty(),
+            "q only cancels here"
+        );
+        assert!(a.confirm.is_none());
+        assert!(a.status.clone().unwrap().contains("cancelled"));
+    }
+
+    #[test]
+    fn hashes_copy_as_is_in_both_modes() {
+        let mut a = iocs_app();
+        a.panes.iocs.select(2);
+        let sha = a.report().unwrap().file.hashes.clone().unwrap().sha256;
+        let cmds = update(&mut a, key(KeyCode::Char('y')));
+        assert_eq!(copied(&cmds), sha);
+        let cmds = update(&mut a, key(KeyCode::Char('Y')));
+        assert_eq!(copied(&cmds), sha, "no confirmation for our own hex");
+        assert!(a.status.clone().unwrap().contains("as is"));
+    }
+
+    #[test]
+    fn strings_copy_sanitized_and_defanged() {
+        let items = vec![string(0, "beacon http://evil.ru/x\x1b[2J", &[])];
+        let mut a = strings_app(items, (100, 30));
+        update(&mut a, key(KeyCode::Char('4')));
+        let cmds = update(&mut a, key(KeyCode::Char('y')));
+        assert_eq!(copied(&cmds), r"beacon hxxp://evil[.]ru/x\x1b[2J");
+    }
+
+    #[test]
+    fn findings_copy_the_selected_evidence() {
+        let mut a = ready_app("s.exe", suspicious_pe(), (100, 30));
+        let cmds = update(&mut a, key(KeyCode::Char('y')));
+        let first = &a.report().unwrap().findings[0];
+        assert_eq!(copied(&cmds), format!("{}: {}", first.id, first.title));
+        update(&mut a, key(KeyCode::Right));
+        assert_eq!(a.panes.focus, Focus::Evidence);
+        let cmds = update(&mut a, key(KeyCode::Char('y')));
+        assert_eq!(copied(&cmds), "KERNEL32.dll!OpenProcess");
+    }
+
+    #[test]
+    fn too_large_payloads_are_refused() {
+        let items = vec![string(0, &"A".repeat(OSC52_LIMIT + 1), &[])];
+        let mut a = strings_app(items, (100, 30));
+        update(&mut a, key(KeyCode::Char('4')));
+        assert!(update(&mut a, key(KeyCode::Char('y'))).is_empty());
+        assert!(a.status.clone().unwrap().contains("exceeds 64 KiB"));
+    }
+
+    #[test]
+    fn empty_iocs_y_is_noop() {
+        let mut a = ready_app("t.txt", b"plain".to_vec(), (100, 30));
+        if let Phase::Ready(r) = &mut a.phase {
+            r.file.hashes = None;
+        }
+        a.panes.iocs = ListState::new(0);
+        update(&mut a, key(KeyCode::Char('5')));
+        assert!(update(&mut a, key(KeyCode::Char('y'))).is_empty());
+        assert!(update(&mut a, key(KeyCode::Char('Y'))).is_empty());
+        assert!(a.confirm.is_none());
+        assert!(a.status.clone().unwrap().contains("nothing to copy"));
+    }
+
+    #[test]
+    fn explain_has_nothing_to_copy() {
+        let mut a = iocs_app();
+        update(&mut a, key(KeyCode::Char('6')));
+        assert!(update(&mut a, key(KeyCode::Char('y'))).is_empty());
+        assert_eq!(a.tab, Tab::Explain);
     }
 }

@@ -116,6 +116,10 @@ pub struct Panes {
     pub string_rows: Vec<u32>,
     /// Active strings filter.
     pub string_filter: StringFilter,
+    /// IOCs list: the file hashes first, then the indicators.
+    pub iocs: ListState,
+    /// Show IOCs as found instead of defanged.
+    pub raw_iocs: bool,
     /// Details of the selected evidence item if it is a byte range.
     pub range: Option<RangeInfo>,
 }
@@ -129,7 +133,8 @@ impl Panes {
             Tab::Sections => Some(&mut self.sections),
             Tab::Imports => Some(&mut self.imports),
             Tab::Strings => Some(&mut self.strings),
-            Tab::Iocs | Tab::Explain => None,
+            Tab::Iocs => Some(&mut self.iocs),
+            Tab::Explain => None,
         }
     }
 
@@ -141,7 +146,8 @@ impl Panes {
             Tab::Sections => Some(&self.sections),
             Tab::Imports => Some(&self.imports),
             Tab::Strings => Some(&self.strings),
-            Tab::Iocs | Tab::Explain => None,
+            Tab::Iocs => Some(&self.iocs),
+            Tab::Explain => None,
         }
     }
 }
@@ -173,6 +179,8 @@ pub struct App {
     pub query: Option<String>,
     /// Strings filter dialog, while open (keys go to it).
     pub filter_dialog: Option<FilterDialog>,
+    /// A raw copy waiting for `y` (anything else cancels it).
+    pub confirm: Option<PendingCopy>,
 }
 
 impl App {
@@ -191,6 +199,7 @@ impl App {
             prompt: None,
             query: None,
             filter_dialog: None,
+            confirm: None,
         }
     }
 
@@ -225,4 +234,13 @@ impl App {
 /// `true` if the report is incomplete because the analysis was cancelled.
 pub fn is_partial(report: &Report) -> bool {
     report.analysis_limited.contains(&AnalysisLimit::Partial)
+}
+
+/// A raw (unsanitized) copy the user still has to confirm.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingCopy {
+    /// Exactly what will be copied.
+    pub payload: String,
+    /// What it is, for the status line (sanitized).
+    pub label: String,
 }

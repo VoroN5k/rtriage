@@ -16,6 +16,8 @@ pub(super) struct TableSpec<'a> {
     pub header: &'a [&'a str],
     /// Column widths.
     pub widths: &'a [Constraint],
+    /// Mark the cursor row (off when the cursor is in another widget).
+    pub highlight: bool,
     /// Shown instead of the table when it has no rows.
     pub empty: String,
 }
@@ -40,7 +42,7 @@ pub(super) fn draw(
         .filter_map(|i| cells(i).map(|c| (i, c)))
         .map(|(i, c)| {
             let row = Row::new(c);
-            if Some(i) == state.selected() {
+            if spec.highlight && Some(i) == state.selected() {
                 row.style(Style::new().add_modifier(Modifier::REVERSED))
             } else {
                 row

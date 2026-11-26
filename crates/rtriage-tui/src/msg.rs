@@ -24,6 +24,10 @@ pub enum Msg {
 pub enum Cmd {
     /// Set the analysis cancel token.
     Cancel,
+    /// Put this text on the clipboard (OSC 52). Already checked against
+    /// [`crate::copy::OSC52_LIMIT`]; sanitized unless the user confirmed a
+    /// raw copy.
+    Copy(String),
     /// Leave the TUI.
     Quit,
 }

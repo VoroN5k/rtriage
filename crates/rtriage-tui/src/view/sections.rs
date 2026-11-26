@@ -42,6 +42,7 @@ fn pe(app: &App, report: &Report, frame: &mut Frame<'_>, area: Rect) {
         title: format!(" Sections ({}) ", app.panes.sections.len()),
         header: &rows::PE_SECTION_COLUMNS,
         widths: &widths,
+        highlight: true,
         empty: "No section table (it could not be parsed; see the report's errors).".into(),
     };
     table::draw(frame, area, &spec, &app.panes.sections, &|r| {
@@ -66,6 +67,7 @@ fn elf(app: &App, report: &Report, frame: &mut Frame<'_>, area: Rect) {
         ),
         header: &rows::ELF_SECTION_COLUMNS,
         widths: &widths,
+        highlight: true,
         empty: "No section headers (stripped, truncated or hand-crafted ELF). Press s for the program headers."
             .into(),
     };
@@ -92,6 +94,7 @@ fn segments(app: &App, report: &Report, frame: &mut Frame<'_>, area: Rect) {
         ),
         header: &rows::ELF_SEGMENT_COLUMNS,
         widths: &widths,
+        highlight: true,
         empty: "No program headers.".into(),
     };
     table::draw(frame, area, &spec, &app.panes.segments, &|r| {

@@ -1,0 +1,29 @@
+---
+source: crates/rtriage-tui/src/view/iocs.rs
+assertion_line: 144
+expression: screen
+---
+" rtriage  [HIGH (score 61)]  s.exe · PE · 7.0 KiB (7168 bytes)                                      "
+" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain                               "
+"┌ File hashes · y copy ────────────────────────────────────────────────────────────────────────────┐"
+"│md5     7306f2dd066822905457018ca9a9b6ed                                                          │"
+"│sha1    03dbba0973a6bc112b8164d373f9d93da58c8849                                                  │"
+"│sha256  d56e0f4bc53d632dbb21bfcb807cec3b0bf84b9e451b49b428cec09a7e8d5e0e                          │"
+"└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
+"┌ IOCs (2) · RAW · d defang · y copy · Y copy raw ─────────────────────────────────────────────────┐"
+"│Kind          Value                                              Notes            Count First at  │"
+"│url           http://c2.evil-example.ru/gate.php                                  1     0x00000801│"
+"│domain        c2.evil-example.ru                                                  1     0x00000801│"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
+" ? help · Tab/1-6 tabs · / search · Backspace back · q quit                                         "

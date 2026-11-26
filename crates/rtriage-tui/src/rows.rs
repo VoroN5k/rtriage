@@ -6,6 +6,7 @@ use rtriage_sanitize::single_line;
 
 use crate::app::{App, Tab};
 use crate::model;
+use crate::view::snake;
 
 /// Column titles of the PE section table.
 pub const PE_SECTION_COLUMNS: [&str; 8] = [
@@ -156,6 +157,83 @@ pub fn searchable<'a>(
                 string(report, item)
             })
         }
-        Tab::Iocs | Tab::Explain => return None,
+        Tab::Iocs => {
+            let raw = app.panes.raw_iocs;
+            Box::new(move |r| ioc(report, r, raw).map(|c| c.join(" ")))
+        }
+        Tab::Explain => return None,
+    })
+}
+
+/// One row of the IOCs tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IocRow<'a> {
+    /// A file hash: algorithm and lowercase hex (computed by rtriage).
+    Hash(&'static str, &'a str),
+    /// An indicator extracted from the file's strings.
+    Ioc(&'a rtriage_core::report::Ioc),
+}
+
+/// Column titles of the IOCs table.
+pub const IOC_COLUMNS: [&str; 5] = ["Kind", "Value", "Notes", "Count", "First at"];
+
+fn hashes(report: &Report) -> Vec<IocRow<'_>> {
+    report.file.hashes.as_ref().map_or_else(Vec::new, |h| {
+        vec![
+            IocRow::Hash("md5", h.md5.as_str()),
+            IocRow::Hash("sha1", h.sha1.as_str()),
+            IocRow::Hash("sha256", h.sha256.as_str()),
+        ]
+    })
+}
+
+/// Rows of the IOCs tab.
+pub fn ioc_count(report: &Report) -> usize {
+    let iocs = report.facts.iocs.as_ref().map_or(0, |i| i.items.len());
+    hashes(report).len().saturating_add(iocs)
+}
+
+/// IOCs row `row`: hashes first, then indicators.
+pub fn ioc_row(report: &Report, row: usize) -> Option<IocRow<'_>> {
+    let h = hashes(report);
+    match h.get(row) {
+        Some(r) => Some(*r),
+        None => report
+            .facts
+            .iocs
+            .as_ref()?
+            .items
+            .get(row.checked_sub(h.len())?)
+            .map(IocRow::Ioc),
+    }
+}
+
+/// Cells of IOCs row `row`, defanged unless `raw`.
+pub fn ioc(report: &Report, row: usize, raw: bool) -> Option<Vec<String>> {
+    Some(match ioc_row(report, row)? {
+        IocRow::Hash(alg, hex) => vec![
+            alg.to_owned(),
+            hex.to_owned(),
+            "file hash".to_owned(),
+            String::new(),
+            String::new(),
+        ],
+        IocRow::Ioc(i) => {
+            let value = if raw { &i.value } else { &i.value_defanged };
+            let mut notes: Vec<String> = i.scope.iter().map(snake).collect();
+            if i.allowlisted {
+                notes.push("allowlisted".to_owned());
+            }
+            vec![
+                snake(&i.kind),
+                single_line(value).into_owned(),
+                notes.join(", "),
+                i.count.to_string(),
+                i.offsets
+                    .first()
+                    .map(|o| format!("0x{o:08x}"))
+                    .unwrap_or_default(),
+            ]
+        }
     })
 }
