@@ -14,7 +14,9 @@ mod jump;
 mod list;
 mod model;
 mod msg;
+mod rows;
 mod runtime;
+mod search;
 #[cfg(test)]
 mod testkit;
 mod update;

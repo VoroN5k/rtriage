@@ -46,6 +46,11 @@ pub fn suspicious_pe() -> Vec<u8> {
         .bytes
 }
 
+/// A typical hardened glibc PIE (benign look-alike).
+pub fn glibc_elf() -> Vec<u8> {
+    rtriage_fixtures::elf::profiles::glibc_pie().build().bytes
+}
+
 /// `App` for `data` named `name`, with the analysis finished.
 pub fn ready_app(name: &str, data: Vec<u8>, size: (u16, u16)) -> App {
     let mut app = App::new(Arc::new(Input::from_bytes(name, data)), size);
@@ -57,6 +62,14 @@ pub fn ready_app(name: &str, data: Vec<u8>, size: (u16, u16)) -> App {
 /// Default analysis of `input`.
 pub fn analyze(input: &Input) -> Report {
     Registry::default().analyze(input, &Config::default())
+}
+
+/// The screen for `app` at its own size, as text.
+pub fn render(app: &App) -> String {
+    let (w, h) = app.size;
+    let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
+    t.draw(|f| crate::view::view(app, f)).unwrap();
+    t.backend().to_string()
 }
 
 /// A key press without modifiers.

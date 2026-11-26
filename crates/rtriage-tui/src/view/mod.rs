@@ -3,7 +3,10 @@
 
 mod findings;
 mod help;
+mod imports;
 mod loading;
+mod sections;
+mod table;
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -177,13 +180,16 @@ fn ready(app: &App, report: &Report, frame: &mut Frame<'_>, area: Rect) {
         tabs,
     );
 
-    if app.tab == Tab::Findings {
-        findings::draw(app, report, frame, body);
-    } else {
-        let block = Block::new()
-            .borders(Borders::ALL)
-            .title(format!(" {} ", app.tab.title()));
-        frame.render_widget(Paragraph::new(placeholder(app)).block(block), body);
+    match app.tab {
+        Tab::Findings => findings::draw(app, report, frame, body),
+        Tab::Sections => sections::draw(app, report, frame, body),
+        Tab::Imports => imports::draw(app, report, frame, body),
+        _ => {
+            let block = Block::new()
+                .borders(Borders::ALL)
+                .title(format!(" {} ", app.tab.title()));
+            frame.render_widget(Paragraph::new(placeholder(app)).block(block), body);
+        }
     }
 
     let mut status_spans = Vec::new();
@@ -193,6 +199,19 @@ fn ready(app: &App, report: &Report, frame: &mut Frame<'_>, area: Rect) {
             Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
         ));
     }
+    if let Some(text) = &app.prompt {
+        // What the user types is shown escaped like everything else.
+        status_spans.push(Span::styled(
+            format!(" /{}▏", single_line(text)),
+            Style::new().add_modifier(Modifier::BOLD),
+        ));
+        status_spans.push(Span::styled(
+            "  Enter search · Esc cancel",
+            Style::new().add_modifier(Modifier::DIM),
+        ));
+        frame.render_widget(Line::from(status_spans), status);
+        return;
+    }
     match &app.status {
         // Status notes are built from sanitized text only.
         Some(note) => status_spans.push(Span::styled(
@@ -200,7 +219,7 @@ fn ready(app: &App, report: &Report, frame: &mut Frame<'_>, area: Rect) {
             Style::new().add_modifier(Modifier::BOLD),
         )),
         None => status_spans.push(Span::styled(
-            " ? help · Tab/1-6 tabs · Backspace back · q quit",
+            " ? help · Tab/1-6 tabs · / search · Backspace back · q quit",
             Style::new().add_modifier(Modifier::DIM),
         )),
     }

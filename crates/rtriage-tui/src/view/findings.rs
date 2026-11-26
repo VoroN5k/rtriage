@@ -5,13 +5,14 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
-use rtriage_core::{Evidence, Finding, Report, Severity};
+use rtriage_core::{Evidence, Finding, Report};
 use rtriage_sanitize::single_line;
 
 use super::{level_name, snake};
 use crate::app::{App, Focus};
 use crate::jump::{self, RangeInfo, RANGE_ENTROPY_CAP};
 use crate::list::ListState;
+use crate::rows::{self, severity_name};
 
 pub(super) fn draw(app: &App, report: &Report, frame: &mut Frame<'_>, area: Rect) {
     let [left, right] =
@@ -55,15 +56,6 @@ fn cursor_style(focused: bool) -> Style {
     }
 }
 
-fn severity_name(s: Severity) -> &'static str {
-    match s {
-        Severity::High => "HIGH",
-        Severity::Medium => "MED",
-        Severity::Low => "LOW",
-        Severity::Info => "INFO",
-    }
-}
-
 fn list(report: &Report, state: &ListState, focused: bool, frame: &mut Frame<'_>, area: Rect) {
     let block = pane(format!("Findings ({})", report.findings.len()), focused);
     let inner = block.inner(area);
@@ -75,16 +67,8 @@ fn list(report: &Report, state: &ListState, focused: bool, frame: &mut Frame<'_>
     let rows = usize::from(inner.height);
     let lines: Vec<Line<'_>> = state
         .window(rows)
-        .filter_map(|i| report.findings.get(i).map(|f| (i, f)))
-        .map(|(i, f)| {
-            // `~` marks findings that are explained away and score 0.
-            let mark = if f.suppressed.is_some() { '~' } else { ' ' };
-            let text = format!(
-                "{:<4} {mark}{} {}",
-                severity_name(f.severity),
-                f.id,
-                single_line(&f.title)
-            );
+        .filter_map(|i| rows::finding(report, i).map(|t| (i, t)))
+        .map(|(i, text)| {
             let line = Line::from(text);
             if Some(i) == state.selected() {
                 line.style(cursor_style(focused))
@@ -400,6 +384,10 @@ mod tests {
         update(&mut app, key(KeyCode::Enter));
         update(&mut app, key(KeyCode::Enter));
         let screen = render(&app);
-        assert!(screen.contains("row 2 of 4"), "{screen}");
+        assert_eq!(app.panes.sections.selected(), Some(1));
+        assert!(
+            screen.contains("Sections (4)") && screen.contains(".evil"),
+            "{screen}"
+        );
     }
 }

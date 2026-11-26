@@ -1,0 +1,29 @@
+---
+source: crates/rtriage-tui/src/view/sections.rs
+assertion_line: 114
+expression: render(&app)
+---
+" rtriage  [HIGH (score 61)]  s.exe · PE · 7.0 KiB (7168 bytes)                  "
+" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain           "
+"┌ Sections (4) ────────────────────────────────────────────────────────────────┐"
+"│#   Name                VirtAddr   VirtSize  RawOff     RawSize   Perm Entropy│"
+"│0   .text               0x00001000 0x200     0x00000400 0x200     r-x  0.00   │"
+"│1   .evil               0x00002000 0x200     0x00000600 0x200     rwx  0.00   │"
+"│2   .data               0x00003000 0x30      0x00000800 0x200     rw-  0.80   │"
+"│3   .rdata              0x00004000 0x13f     0x00000a00 0x200     r--  2.30   │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" ? help · Tab/1-6 tabs · / search · Backspace back · q quit                     "

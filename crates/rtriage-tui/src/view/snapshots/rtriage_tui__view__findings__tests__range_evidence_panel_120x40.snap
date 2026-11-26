@@ -1,6 +1,6 @@
 ---
 source: crates/rtriage-tui/src/view/findings.rs
-assertion_line: 301
+assertion_line: 300
 expression: screen
 ---
 " rtriage  [HIGH (score 61)]  s.exe · PE · 7.0 KiB (7168 bytes)                                                          "
@@ -42,4 +42,4 @@ expression: screen
 "│                                                ││                                                                    │"
 "│                                                ││                                                                    │"
 "└────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────┘"
-" ? help · Tab/1-6 tabs · Backspace back · q quit                                                                        "
+" ? help · Tab/1-6 tabs · / search · Backspace back · q quit                                                             "

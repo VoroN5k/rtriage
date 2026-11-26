@@ -102,6 +102,10 @@ pub struct Panes {
     pub focus: Focus,
     /// Sections list.
     pub sections: ListState,
+    /// ELF program headers (Sections tab with `show_segments`).
+    pub segments: ListState,
+    /// Sections tab shows ELF segments instead of section headers.
+    pub show_segments: bool,
     /// Imports list.
     pub imports: ListState,
     /// Strings list.
@@ -115,6 +119,7 @@ impl Panes {
     pub fn list_mut(&mut self, tab: Tab) -> Option<&mut ListState> {
         match tab {
             Tab::Findings => Some(&mut self.findings),
+            Tab::Sections if self.show_segments => Some(&mut self.segments),
             Tab::Sections => Some(&mut self.sections),
             Tab::Imports => Some(&mut self.imports),
             Tab::Strings => Some(&mut self.strings),
@@ -126,6 +131,7 @@ impl Panes {
     pub fn list(&self, tab: Tab) -> Option<&ListState> {
         match tab {
             Tab::Findings => Some(&self.findings),
+            Tab::Sections if self.show_segments => Some(&self.segments),
             Tab::Sections => Some(&self.sections),
             Tab::Imports => Some(&self.imports),
             Tab::Strings => Some(&self.strings),
@@ -155,6 +161,10 @@ pub struct App {
     pub history: History,
     /// One-line message for the status bar, cleared by the next key.
     pub status: Option<String>,
+    /// Search text being typed after `/` (keys go to it while open).
+    pub prompt: Option<String>,
+    /// Last applied search, used by `n` / `N` in any tab.
+    pub query: Option<String>,
 }
 
 impl App {
@@ -170,13 +180,23 @@ impl App {
             panes: Panes::default(),
             history: History::default(),
             status: None,
+            prompt: None,
+            query: None,
         }
     }
 
-    /// Rows available to the main list of a tab (body minus its borders).
+    /// Rows available to the main list of the current tab.
     pub fn list_rows(&self) -> usize {
+        self.rows_for(self.tab)
+    }
+
+    /// Rows available to the main list of `tab`: the body minus its borders,
+    /// minus the column header of table tabs.
+    pub fn rows_for(&self, tab: Tab) -> usize {
         // Header, tab bar and status line, plus the pane's two borders.
-        usize::from(self.size.1.saturating_sub(5)).max(1)
+        let body = self.size.1.saturating_sub(5);
+        let header = u16::from(tab != Tab::Findings);
+        usize::from(body.saturating_sub(header)).max(1)
     }
 
     /// The report, once the analysis has finished.

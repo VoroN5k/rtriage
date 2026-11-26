@@ -8,6 +8,8 @@ use crate::jump::{self, Location, Target};
 use crate::list::ListState;
 use crate::model;
 use crate::msg::{Cmd, Msg};
+use crate::rows;
+use crate::search::{self, Direction, MAX_QUERY_CHARS};
 
 /// Applies `msg` to `app` and returns the effects to perform, in order.
 pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
@@ -25,6 +27,7 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
             app.panes = Panes {
                 findings: ListState::new(report.findings.len()),
                 sections: ListState::new(model::section_count(&report)),
+                segments: ListState::new(rows::segment_count(&report)),
                 imports: ListState::new(model::import_rows(&report).len()),
                 strings: ListState::new(model::string_count(&report)),
                 ..Panes::default()
@@ -43,7 +46,14 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
 fn on_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
     app.status = None;
     let ctrl_c = key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
-    if ctrl_c || key.code == KeyCode::Char('q') {
+    if ctrl_c {
+        return quit(app);
+    }
+    if app.prompt.is_some() {
+        prompt_key(app, key.code);
+        return Vec::new();
+    }
+    if key.code == KeyCode::Char('q') {
         return quit(app);
     }
     if key.code == KeyCode::Esc {
@@ -55,6 +65,10 @@ fn on_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
     match key.code {
         KeyCode::Char('?') => app.help = !app.help,
         _ if app.help || app.report().is_none() => {}
+        KeyCode::Char('/') => open_prompt(app),
+        KeyCode::Char('n') => search_step(app, Direction::Next),
+        KeyCode::Char('N') => search_step(app, Direction::Previous),
+        KeyCode::Char('s') if app.tab == Tab::Sections => toggle_segments(app),
         KeyCode::Tab => app.tab = app.tab.cycle(1),
         KeyCode::BackTab => app.tab = app.tab.cycle(-1),
         KeyCode::Char(c @ '1'..='9') => {
@@ -68,6 +82,81 @@ fn on_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
         code => navigate(app, code),
     }
     Vec::new()
+}
+
+fn open_prompt(app: &mut App) {
+    if app.panes.list(app.tab).is_some() {
+        app.prompt = Some(String::new());
+    } else {
+        app.status = Some(format!("search is not available in {}", app.tab.title()));
+    }
+}
+
+/// Keys while the search prompt is open: everything is text except
+/// Enter (search), Esc (cancel) and Backspace (delete).
+fn prompt_key(app: &mut App, code: KeyCode) {
+    let Some(text) = app.prompt.as_mut() else {
+        return;
+    };
+    match code {
+        KeyCode::Esc => app.prompt = None,
+        KeyCode::Backspace => {
+            text.pop();
+        }
+        KeyCode::Char(c) if text.chars().count() < MAX_QUERY_CHARS => text.push(c),
+        KeyCode::Enter => {
+            let query = app.prompt.take().unwrap_or_default();
+            if !query.is_empty() {
+                app.query = Some(query);
+                search_step(app, Direction::Here);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Moves the current list's cursor to the next match of the last search.
+fn search_step(app: &mut App, dir: Direction) {
+    let Some(query) = app.query.clone() else {
+        app.status = Some("no search yet: press / to search".into());
+        return;
+    };
+    let (Some(report), Some(list)) = (app.report(), app.panes.list(app.tab)) else {
+        return;
+    };
+    let Some(text) = rows::searchable(app, report) else {
+        return;
+    };
+    let found = search::find(list.len(), list.selected().unwrap_or(0), dir, &query, &text);
+    drop(text);
+    let shown = rtriage_sanitize::single_line(&query).into_owned();
+    let Some(found) = found else {
+        app.status = Some(format!("no match for \"{shown}\""));
+        return;
+    };
+    let rows = app.list_rows();
+    let tab = app.tab;
+    if let Some(list) = app.panes.list_mut(tab) {
+        list.select(found.row);
+        list.follow(rows);
+    }
+    if tab == Tab::Findings {
+        finding_changed(app);
+    }
+    let wrapped = if found.wrapped { " · wrapped" } else { "" };
+    app.status = Some(format!(
+        "\"{shown}\": match {} of {}{wrapped} · n next · N previous",
+        found.nth, found.total
+    ));
+}
+
+fn toggle_segments(app: &mut App) {
+    let is_elf = app.report().is_some_and(|r| r.facts.elf.is_some());
+    if is_elf {
+        app.panes.show_segments = !app.panes.show_segments;
+    } else {
+        app.status = Some("only ELF files have segments (program headers)".into());
+    }
 }
 
 /// Cursor movement for `code` (the `usize` is the page height); `None` if
@@ -173,7 +262,11 @@ fn jump_to_evidence(app: &mut App) {
     match jump::resolve(report, &target) {
         Ok((tab, row)) => {
             let here = location(app);
-            let rows = app.list_rows();
+            let rows = app.rows_for(tab);
+            if tab == Tab::Sections {
+                // Section evidence names section headers, not segments.
+                app.panes.show_segments = false;
+            }
             if let Some(list) = app.panes.list_mut(tab) {
                 list.select(row);
                 list.follow(rows);
@@ -231,10 +324,15 @@ fn quit(app: &mut App) -> Vec<Cmd> {
     cmds
 }
 
-/// Esc: close the help overlay, else cancel a running analysis.
+/// Esc: close the help overlay, else clear the search, else cancel a
+/// running analysis.
 fn escape(app: &mut App) -> Vec<Cmd> {
     if app.help {
         app.help = false;
+        return Vec::new();
+    }
+    if app.query.take().is_some() {
+        app.status = Some("search cleared".into());
         return Vec::new();
     }
     request_cancel(app)
@@ -627,5 +725,218 @@ mod findings_tests {
         update(&mut a, key(KeyCode::Down));
         assert_eq!(a.panes.imports.selected(), Some(1));
         assert_eq!(a.panes.findings.selected(), Some(0));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod search_tests {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use rtriage_core::Evidence;
+
+    use super::*;
+    use crate::app::Tab;
+    use crate::testkit::{glibc_elf, key, ready_app, suspicious_pe};
+
+    fn app() -> App {
+        ready_app("s.exe", suspicious_pe(), (100, 30))
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for c in text.chars() {
+            update(app, key(KeyCode::Char(c)));
+        }
+    }
+
+    fn search(app: &mut App, text: &str) {
+        update(app, key(KeyCode::Char('/')));
+        assert_eq!(app.prompt.as_deref(), Some(""));
+        type_text(app, text);
+        update(app, key(KeyCode::Enter));
+        assert_eq!(app.prompt, None);
+    }
+
+    #[test]
+    fn search_finds_next_and_wraps() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Char('3')));
+        search(&mut a, "virtualalloc");
+        assert_eq!(a.panes.imports.selected(), Some(1), "VirtualAllocEx");
+
+        search(&mut a, "PROCESS");
+        // From the cursor (row 1) forwards: WriteProcessMemory.
+        assert_eq!(a.panes.imports.selected(), Some(2));
+        assert!(a.status.clone().unwrap().contains("match 2 of 2"));
+        update(&mut a, key(KeyCode::Char('n')));
+        assert_eq!(
+            a.panes.imports.selected(),
+            Some(0),
+            "wrapped to OpenProcess"
+        );
+        assert!(a.status.clone().unwrap().contains("wrapped"));
+        update(&mut a, key(KeyCode::Char('n')));
+        assert_eq!(a.panes.imports.selected(), Some(2));
+        update(&mut a, key(KeyCode::Char('N')));
+        assert_eq!(a.panes.imports.selected(), Some(0));
+    }
+
+    #[test]
+    fn search_matches_the_library_too() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Char('3')));
+        search(&mut a, "winhttp.dll");
+        assert_eq!(a.panes.imports.selected(), Some(4), "WinHttpOpen");
+    }
+
+    #[test]
+    fn search_no_match_keeps_cursor() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Char('3')));
+        update(&mut a, key(KeyCode::Down));
+        search(&mut a, "nope-not-here");
+        assert_eq!(a.panes.imports.selected(), Some(1));
+        assert!(a.status.clone().unwrap().contains("no match"));
+    }
+
+    #[test]
+    fn search_in_findings_updates_the_evidence() {
+        let mut a = app();
+        search(&mut a, "overlay-high");
+        let r = a.report().unwrap();
+        let f = &r.findings[a.panes.findings.selected().unwrap()];
+        assert_eq!(f.id, "PE-OVERLAY-HIGH-ENTROPY");
+        assert_eq!(a.panes.evidence.len(), f.evidence.len());
+    }
+
+    #[test]
+    fn prompt_takes_every_character() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Char('/')));
+        type_text(&mut a, "q?2/nN");
+        assert_eq!(a.prompt.as_deref(), Some("q?2/nN"));
+        assert_eq!(a.tab, Tab::Findings);
+        assert!(!a.help);
+        update(&mut a, key(KeyCode::Backspace));
+        assert_eq!(a.prompt.as_deref(), Some("q?2/n"));
+        // Ctrl-C still quits while typing.
+        let ctrl_c = Msg::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(update(&mut a, ctrl_c), [Cmd::Quit]);
+    }
+
+    #[test]
+    fn prompt_length_is_capped() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Char('/')));
+        type_text(&mut a, &"x".repeat(1000));
+        assert_eq!(
+            a.prompt.as_ref().unwrap().chars().count(),
+            crate::search::MAX_QUERY_CHARS
+        );
+    }
+
+    #[test]
+    fn esc_cancels_the_prompt_then_clears_the_search() {
+        let mut a = app();
+        search(&mut a, "rwx");
+        assert_eq!(a.query.as_deref(), Some("rwx"));
+        update(&mut a, key(KeyCode::Char('/')));
+        type_text(&mut a, "abc");
+        update(&mut a, key(KeyCode::Esc));
+        assert_eq!(a.prompt, None);
+        assert_eq!(
+            a.query.as_deref(),
+            Some("rwx"),
+            "cancelled prompt keeps the old search"
+        );
+        update(&mut a, key(KeyCode::Esc));
+        assert_eq!(a.query, None);
+    }
+
+    #[test]
+    fn empty_search_is_ignored() {
+        let mut a = app();
+        search(&mut a, "");
+        assert_eq!(a.query, None);
+    }
+
+    #[test]
+    fn n_without_a_search_notes() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Char('n')));
+        assert!(a.status.clone().unwrap().contains("press /"));
+    }
+
+    #[test]
+    fn search_is_unavailable_without_a_list() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Char('6')));
+        update(&mut a, key(KeyCode::Char('/')));
+        assert_eq!(a.prompt, None);
+        assert!(a.status.is_some());
+    }
+
+    #[test]
+    fn s_toggles_elf_segments() {
+        let mut a = ready_app("t.elf", glibc_elf(), (100, 30));
+        update(&mut a, key(KeyCode::Char('2')));
+        assert!(!a.panes.show_segments);
+        update(&mut a, key(KeyCode::Char('s')));
+        assert!(a.panes.show_segments);
+        assert!(!a.panes.segments.is_empty());
+        update(&mut a, key(KeyCode::Down));
+        assert_eq!(a.panes.segments.selected(), Some(1));
+        assert_eq!(a.panes.sections.selected(), Some(0), "own cursor");
+        search(&mut a, "gnu_stack");
+        let row = a.panes.segments.selected().unwrap();
+        let seg = &a
+            .report()
+            .unwrap()
+            .facts
+            .elf
+            .as_ref()
+            .unwrap()
+            .segments
+            .as_ref()
+            .unwrap()[row];
+        assert_eq!(seg.kind, "GNU_STACK");
+        update(&mut a, key(KeyCode::Char('s')));
+        assert!(!a.panes.show_segments);
+    }
+
+    #[test]
+    fn s_on_a_pe_notes() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Char('2')));
+        update(&mut a, key(KeyCode::Char('s')));
+        assert!(!a.panes.show_segments);
+        assert!(a.status.clone().unwrap().contains("ELF"));
+    }
+
+    #[test]
+    fn section_jump_shows_section_headers() {
+        let mut a = ready_app("t.elf", glibc_elf(), (100, 30));
+        update(&mut a, key(KeyCode::Char('2')));
+        update(&mut a, key(KeyCode::Char('s')));
+        update(&mut a, key(KeyCode::Char('1')));
+        if let Phase::Ready(r) = &mut a.phase {
+            let f = rtriage_core::Finding::new(
+                "TEST",
+                rtriage_core::Severity::Info,
+                rtriage_core::Category::Metadata,
+                "t",
+            )
+            .evidence(Evidence::Section {
+                index: 1,
+                name: ".interp".into(),
+            });
+            r.findings.insert(0, f);
+            a.panes.findings = ListState::new(r.findings.len());
+        }
+        update(&mut a, key(KeyCode::Home));
+        finding_changed(&mut a);
+        update(&mut a, key(KeyCode::Right));
+        update(&mut a, key(KeyCode::Enter));
+        assert_eq!(a.tab, Tab::Sections, "{:?}", a.status);
+        assert!(!a.panes.show_segments);
     }
 }
