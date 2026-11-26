@@ -35,13 +35,14 @@ pub mod yara_sources;
 
 pub use analyzers::{AnalysisContext, Analyzer, Registry};
 pub use config::{Config, Thresholds};
-pub use deadline::{Budget, Deadline};
+pub use deadline::{Budget, CancelToken, Deadline};
 pub use error::{AnalysisError, Error};
 pub use input::{load, sniff_format, Input};
 pub use limits::Limits;
 pub use report::{
-    Category, Confidence, Evidence, Facts, FileInfo, Finding, Format, Hashes, PeFacts,
-    PeHeaderFacts, PeKind, Report, ReportBuilder, Risk, RiskLevel, Severity, StringsIncluded,
+    AnalysisLimit, Category, Confidence, Evidence, Facts, FileInfo, Finding, Format, Hashes,
+    PeFacts, PeHeaderFacts, PeKind, Report, ReportBuilder, Risk, RiskLevel, Severity,
+    StringsIncluded,
 };
 
 /// Crate version, as recorded in `Cargo.toml`.

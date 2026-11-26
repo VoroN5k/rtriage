@@ -7,20 +7,43 @@
 //!   attacker-controlled structures (import thunks, TLS callbacks, ...).
 //!   Each step counts, the deadline is re-checked every [`Budget::CHECK_EVERY`]
 //!   steps, and exceeding `max_steps` is a [`AnalysisError::LimitExceeded`].
+//! - [`CancelToken`]: optional interactive cancellation (TUI) carried by the
+//!   deadline; every check above also reports [`AnalysisError::Cancelled`]
+//!   once it is set, so cancellation needs no extra call sites.
 //!
 //! Third-party parsing calls cannot be interrupted; they are kept bounded by
 //! validating sizes and counts *before* calling them.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::error::AnalysisError;
 
-/// Wall-clock deadline for analysing one file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Shared flag that asks a running analysis to stop. Cheap to clone; all
+/// clones see the same flag.
+#[derive(Debug, Clone, Default)]
+pub struct CancelToken(Arc<AtomicBool>);
+
+impl CancelToken {
+    /// Requests cancellation. Idempotent.
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    /// `true` once [`CancelToken::cancel`] was called on any clone.
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+/// Wall-clock deadline for analysing one file, optionally cancellable.
+#[derive(Debug, Clone)]
 pub struct Deadline {
     /// `None` = no deadline (limit too large to represent).
     at: Option<Instant>,
     limit: Duration,
+    cancel: Option<CancelToken>,
 }
 
 impl Deadline {
@@ -29,6 +52,7 @@ impl Deadline {
         Self {
             at: Instant::now().checked_add(limit),
             limit,
+            cancel: None,
         }
     }
 
@@ -37,6 +61,7 @@ impl Deadline {
         Self {
             at: None,
             limit: Duration::MAX,
+            cancel: None,
         }
     }
 
@@ -45,7 +70,20 @@ impl Deadline {
         Self {
             at: Some(Instant::now()),
             limit: Duration::ZERO,
+            cancel: None,
         }
+    }
+
+    /// The same deadline, also stopped by `token`.
+    #[must_use]
+    pub fn with_cancel(mut self, token: CancelToken) -> Self {
+        self.cancel = Some(token);
+        self
+    }
+
+    /// `true` once the attached [`CancelToken`] (if any) was cancelled.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel.as_ref().is_some_and(CancelToken::is_cancelled)
     }
 
     /// `true` once the deadline has passed.
@@ -53,9 +91,12 @@ impl Deadline {
         self.at.is_some_and(|at| Instant::now() >= at)
     }
 
-    /// Returns [`AnalysisError::Timeout`] if the deadline has passed.
+    /// Returns [`AnalysisError::Cancelled`] once cancelled, else
+    /// [`AnalysisError::Timeout`] if the deadline has passed.
     pub fn check(&self) -> Result<(), AnalysisError> {
-        if self.is_expired() {
+        if self.is_cancelled() {
+            Err(AnalysisError::Cancelled)
+        } else if self.is_expired() {
             Err(self.timeout_error())
         } else {
             Ok(())
@@ -79,7 +120,7 @@ impl Deadline {
     /// A step budget bound to this deadline.
     pub fn budget(&self, max_steps: u64) -> Budget {
         Budget {
-            deadline: *self,
+            deadline: self.clone(),
             steps: 0,
             max_steps,
         }
@@ -179,6 +220,46 @@ mod tests {
                 max: 3
             })
         ));
+    }
+
+    #[test]
+    fn cancel_wins_over_time() {
+        let token = CancelToken::default();
+        let d = Deadline::never().with_cancel(token.clone());
+        assert_eq!(d.check(), Ok(()));
+        assert!(!d.is_cancelled());
+        token.cancel();
+        assert!(d.is_cancelled());
+        assert_eq!(d.check(), Err(AnalysisError::Cancelled));
+        // Cancellation is reported even when the time limit has also passed.
+        let both = Deadline::expired().with_cancel(token);
+        assert_eq!(both.check(), Err(AnalysisError::Cancelled));
+    }
+
+    #[test]
+    fn clones_share_the_token() {
+        let token = CancelToken::default();
+        let d = Deadline::never().with_cancel(token.clone());
+        let copy = d.clone();
+        token.cancel();
+        assert_eq!(copy.check(), Err(AnalysisError::Cancelled));
+    }
+
+    #[test]
+    fn budget_sees_cancel() {
+        let token = CancelToken::default();
+        let mut b = Deadline::never()
+            .with_cancel(token.clone())
+            .budget(u64::MAX);
+        token.cancel();
+        let mut result = Ok(());
+        for _ in 0..Budget::CHECK_EVERY {
+            result = b.step();
+            if result.is_err() {
+                break;
+            }
+        }
+        assert_eq!(result, Err(AnalysisError::Cancelled));
     }
 
     #[test]

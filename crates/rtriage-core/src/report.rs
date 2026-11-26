@@ -1154,6 +1154,9 @@ pub enum AnalysisLimit {
     /// Code is packed or protected: imports, strings and code-based findings
     /// describe the unpacking stub, not the real program.
     Packed,
+    /// The analysis was cancelled (TUI only): some analyzers did not run or
+    /// did not finish, so the findings and the score are incomplete.
+    Partial,
 }
 
 /// An analyzer that failed, and why.

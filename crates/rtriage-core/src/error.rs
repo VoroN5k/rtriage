@@ -77,6 +77,11 @@ pub enum AnalysisError {
         limit_ms: u64,
     },
 
+    /// The analysis was cancelled interactively (TUI) before this analyzer
+    /// finished. Never produced by the CLI.
+    #[error("analysis cancelled")]
+    Cancelled,
+
     /// A bug in rtriage itself (e.g. a built-in pattern failed to compile).
     /// Never caused by the input file.
     #[error("internal error: {reason}")]

@@ -26,7 +26,7 @@ use crate::config::Config;
 use crate::deadline::Deadline;
 use crate::error::AnalysisError;
 use crate::input::Input;
-use crate::report::{Format, Report, ReportBuilder, Risk, StringsFacts};
+use crate::report::{AnalysisLimit, Format, Report, ReportBuilder, Risk, StringsFacts};
 use crate::rules::PackerRuleSet;
 
 /// Data shared by all analyzers for one file. Derived data is computed on
@@ -286,7 +286,7 @@ impl Registry {
         config: &Config,
         deadline: Deadline,
     ) -> Report {
-        let ctx = AnalysisContext::new(input, config, deadline);
+        let ctx = AnalysisContext::new(input, config, deadline.clone());
         let mut out = ReportBuilder::new(input.file_info());
         for analyzer in self.analyzers.iter().filter(|a| a.applies_to(input.format)) {
             let result = deadline.check().and_then(|()| analyzer.run(&ctx, &mut out));
@@ -312,6 +312,14 @@ impl Registry {
                 });
                 crate::scoring::score(&mut report, &PackerRuleSet::empty());
             }
+        }
+        // After scoring, which rewrites `analysis_limited`.
+        if report
+            .errors
+            .iter()
+            .any(|e| e.error == AnalysisError::Cancelled)
+        {
+            report.analysis_limited.push(AnalysisLimit::Partial);
         }
         report
     }
@@ -421,6 +429,46 @@ mod tests {
             .iter()
             .all(|e| matches!(e.error, AnalysisError::Timeout { .. })));
         assert!(report.file.hashes.is_none());
+    }
+
+    #[test]
+    fn cancelled_run_is_partial() {
+        let token = crate::CancelToken::default();
+        token.cancel();
+        let input = Input::from_bytes("x.bin", b"\x00http://a.example.com/\x00".to_vec());
+        let report = Registry::default().analyze_with_deadline(
+            &input,
+            &Config::default(),
+            Deadline::never().with_cancel(token),
+        );
+        assert_eq!(report.analysis_limited, [AnalysisLimit::Partial]);
+        assert!(!report.errors.is_empty());
+        assert!(report
+            .errors
+            .iter()
+            .all(|e| e.error == AnalysisError::Cancelled));
+    }
+
+    #[test]
+    fn timeout_alone_is_not_marked_partial_limit() {
+        let report = Registry::default().analyze_with_deadline(
+            &unknown_input(),
+            &Config::default(),
+            Deadline::expired(),
+        );
+        assert!(!report.analysis_limited.contains(&AnalysisLimit::Partial));
+    }
+
+    #[test]
+    fn uncancelled_run_has_no_partial() {
+        let token = crate::CancelToken::default();
+        let report = Registry::default().analyze_with_deadline(
+            &unknown_input(),
+            &Config::default(),
+            Deadline::never().with_cancel(token),
+        );
+        assert!(report.analysis_limited.is_empty());
+        assert!(report.errors.is_empty());
     }
 
     /// Reads strings twice; both calls must return the same cached value.

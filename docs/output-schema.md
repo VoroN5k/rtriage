@@ -83,7 +83,7 @@ Only rows are kept in memory during a scan; full reports are streamed.
 | `risk.level` | enum | `clean_looking` \| `low` \| `medium` \| `high`. |
 | `risk.breakdown` | array | One entry per finding in scoring order: `{ id, category, table_points, points, reduced_by? }`. `reduced_by` is `{ kind: "suppressed", explainer, name, by }` (`explainer` is `packer` or `runtime`; `by` is `null` for runtimes), `{ kind: "duplicate" }`, `{ kind: "category_cap", cap }` or `{ kind: "low_severity_cap", cap }`. Not affected by `--min-severity`. |
 | `risk.floor` | object (optional) | Present when a finding's `risk_floor` raised `risk.level` above what `risk.score` gives: `{ level, finding, title }`. The score itself is never changed and still equals the sum of `breakdown` points. |
-| `analysis_limited` | array of enum | Why static analysis is less complete: `packed`. Empty normally. |
+| `analysis_limited` | array of enum | Why static analysis is less complete: `packed`. Empty normally. (`partial` exists for interactive cancellation in the TUI and is never written by the CLI.) |
 | `errors` | array of [AnalyzerFailure](#analyzerfailure) | Analyzers that failed; the rest of the report is still valid. |
 
 ### FileInfo
@@ -313,7 +313,7 @@ before displaying**), `truncated` (bool), `kinds` (array, omitted when empty).
 | Field | Type | Description |
 |---|---|---|
 | `analyzer` | string | Analyzer name, e.g. `strings`. |
-| `error.kind` | enum | `truncated` \| `limit_exceeded` \| `timeout` \| `internal` \| `malformed`, plus kind-specific fields. |
+| `error.kind` | enum | `truncated` \| `limit_exceeded` \| `timeout` \| `internal` \| `malformed`, plus kind-specific fields. (`cancelled` exists for interactive cancellation in the TUI and is never written by the CLI.) |
 
 `timeout` (with `limit_ms`) means the per-file time limit expired: the
 analyzer was interrupted or never started, and the report is partial.

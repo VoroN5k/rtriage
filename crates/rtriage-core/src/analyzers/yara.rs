@@ -10,6 +10,10 @@
 //! matches per pattern, `max_yara_matches` rules and
 //! `max_yara_strings_per_rule` ranges per rule are kept. The scan runs under
 //! `catch_unwind` like every third-party parser.
+//!
+//! Cancellation (TUI): checked before the scan; a scan that returns after
+//! the token was set is discarded as `Cancelled`. The scan itself cannot be
+//! interrupted and stays bounded by the timeout above.
 
 use std::time::Duration;
 
@@ -53,11 +57,26 @@ impl Analyzer for YaraAnalyzer {
                 reason: format!("YARA scan failed: {reason}"),
             },
         })?;
+        let facts = keep_unless_cancelled(&ctx.deadline, facts)?;
         for m in &facts.matches {
             out.push_finding(finding(rules, m));
         }
         out.facts.yara = Some(facts);
         Ok(())
+    }
+}
+
+/// yara-x cannot be interrupted from outside, so a scan may finish after the
+/// analysis was cancelled; its result is then discarded so a cancelled
+/// report never mixes in work done after the cancel.
+fn keep_unless_cancelled(
+    deadline: &crate::Deadline,
+    facts: YaraFacts,
+) -> Result<YaraFacts, AnalysisError> {
+    if deadline.is_cancelled() {
+        Err(AnalysisError::Cancelled)
+    } else {
+        Ok(facts)
     }
 }
 
@@ -430,6 +449,35 @@ mod tests {
             .errors
             .iter()
             .any(|e| e.analyzer == "yara" && matches!(e.error, AnalysisError::Timeout { .. })));
+    }
+
+    #[test]
+    fn cancelled_before_scan_does_not_scan() {
+        let c = config(r#"rule a { condition: true }"#);
+        let input = Input::from_bytes("t", DATA.to_vec());
+        let token = crate::CancelToken::default();
+        token.cancel();
+        let ctx = AnalysisContext::new(&input, &c, crate::Deadline::never().with_cancel(token));
+        let mut out = ReportBuilder::new(input.file_info());
+        // Called directly: the registry's own check would stop it earlier.
+        assert_eq!(
+            YaraAnalyzer.run(&ctx, &mut out),
+            Err(AnalysisError::Cancelled)
+        );
+        assert!(out.facts.yara.is_none());
+    }
+
+    #[test]
+    fn scan_finished_after_cancel_is_discarded() {
+        let token = crate::CancelToken::default();
+        let d = crate::Deadline::never().with_cancel(token.clone());
+        let facts = YaraFacts::default();
+        assert!(keep_unless_cancelled(&d, facts.clone()).is_ok());
+        token.cancel();
+        assert_eq!(
+            keep_unless_cancelled(&d, facts),
+            Err(AnalysisError::Cancelled)
+        );
     }
 
     #[test]
