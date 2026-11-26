@@ -162,7 +162,10 @@ fn empty_input_is_a_clean_exit() {
     assert_eq!(messages(&out).len(), 1);
 }
 
-#[cfg(unix)]
+// Not on Apple targets: APFS only accepts UTF-8 names, so creating the
+// fixture fails with EILSEQ before the worker is involved. The wire encoding
+// of such paths is still covered there by the unit tests in `src/worker.rs`.
+#[cfg(all(unix, not(target_vendor = "apple")))]
 #[test]
 fn non_utf8_paths_are_analyzed() {
     use std::os::unix::ffi::OsStrExt;
