@@ -6,6 +6,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::app::{App, Focus, Panes, PendingCopy, Phase, Tab};
 use crate::copy::{self, OSC52_LIMIT};
 use crate::filter::{self, FilterDialog, StringFilter};
+use crate::hex::{self, MAX_GOTO_CHARS, ROW_BYTES};
 use crate::jump::{self, Location, Target};
 use crate::list::ListState;
 use crate::model;
@@ -66,6 +67,10 @@ fn on_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
         dialog_key(app, key.code);
         return Vec::new();
     }
+    if app.goto.is_some() {
+        goto_key(app, key.code);
+        return Vec::new();
+    }
     if app.prompt.is_some() {
         prompt_key(app, key.code);
         return Vec::new();
@@ -87,6 +92,7 @@ fn on_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
         KeyCode::Char('N') => search_step(app, Direction::Previous),
         KeyCode::Char('s') if app.tab == Tab::Sections => toggle_segments(app),
         KeyCode::Char('f') if app.tab == Tab::Strings => open_filter_dialog(app),
+        KeyCode::Char('g') if app.tab == Tab::Hex => app.goto = Some(String::new()),
         KeyCode::Char('d') if app.tab == Tab::Iocs => app.panes.raw_iocs = !app.panes.raw_iocs,
         KeyCode::Char('y') => return copy(app, false),
         KeyCode::Char('Y') => return copy(app, true),
@@ -335,7 +341,9 @@ fn movement(code: KeyCode) -> Option<fn(&mut ListState, usize)> {
 /// Keys inside the current tab.
 fn navigate(app: &mut App, code: KeyCode) {
     let rows = app.list_rows();
-    if app.tab == Tab::Findings {
+    if app.tab == Tab::Hex {
+        hex_key(app, code);
+    } else if app.tab == Tab::Findings {
         findings_key(app, code, rows);
     } else if app.tab == Tab::Explain && code == KeyCode::Enter {
         explain_jump(app);
@@ -343,6 +351,90 @@ fn navigate(app: &mut App, code: KeyCode) {
         step(list, rows);
         list.follow(rows);
     }
+}
+
+/// Cursor keys of the hex view: rows, bytes, pages, file ends.
+fn hex_key(app: &mut App, code: KeyCode) {
+    let size = app.input.size();
+    let rows = rows_u64(app);
+    let page = i64::try_from(rows.saturating_mul(ROW_BYTES)).unwrap_or(i64::MAX);
+    let row = i64::try_from(ROW_BYTES).unwrap_or(16);
+    let h = &mut app.panes.hex;
+    match code {
+        KeyCode::Up | KeyCode::Char('k') => h.move_by(-row, size, rows),
+        KeyCode::Down | KeyCode::Char('j') => h.move_by(row, size, rows),
+        KeyCode::Left | KeyCode::Char('h') => h.move_by(-1, size, rows),
+        KeyCode::Right | KeyCode::Char('l') => h.move_by(1, size, rows),
+        KeyCode::PageUp => h.move_by(-page, size, rows),
+        KeyCode::PageDown => h.move_by(page, size, rows),
+        KeyCode::Home => h.go_to(0, size, rows),
+        KeyCode::End => h.go_to(u64::MAX, size, rows),
+        _ => {}
+    }
+}
+
+/// Rows of the hex dump (one less when the range line is shown).
+fn rows_u64(app: &App) -> u64 {
+    let rows = app.rows_for(Tab::Hex);
+    let rows = if app.panes.hex.info.is_some() {
+        rows.saturating_sub(1)
+    } else {
+        rows
+    };
+    u64::try_from(rows.max(1)).unwrap_or(1)
+}
+
+/// Keys while the go-to prompt is open.
+fn goto_key(app: &mut App, code: KeyCode) {
+    let Some(text) = app.goto.as_mut() else {
+        return;
+    };
+    match code {
+        KeyCode::Esc => app.goto = None,
+        KeyCode::Backspace => {
+            text.pop();
+        }
+        KeyCode::Char(c) if text.chars().count() < MAX_GOTO_CHARS => text.push(c),
+        KeyCode::Enter => {
+            let text = app.goto.take().unwrap_or_default();
+            let size = app.input.size();
+            match hex::parse_offset(&text) {
+                Ok(offset) if offset < size => {
+                    let rows = rows_u64(app);
+                    app.panes.hex.jump_to(offset, size, rows);
+                }
+                Ok(offset) => {
+                    app.status = Some(format!(
+                        "0x{offset:x} is past the end of the file (size 0x{size:x})"
+                    ));
+                }
+                Err(why) => app.status = Some(why),
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Opens the hex view on a byte range, highlighted.
+fn jump_to_range(app: &mut App, offset: u64, len: u64) {
+    let size = app.input.size();
+    if offset >= size {
+        app.status = Some(format!(
+            "cannot jump: range 0x{offset:x} starts past the end of the file"
+        ));
+        return;
+    }
+    let Some(report) = app.report() else {
+        return;
+    };
+    let info = jump::range_info(&app.input, report, offset, len);
+    let here = location(app);
+    app.history.push(here);
+    app.tab = Tab::Hex;
+    app.panes.hex.highlight = Some((offset, offset.saturating_add(len)));
+    app.panes.hex.info = Some(info);
+    let rows = rows_u64(app);
+    app.panes.hex.jump_to(offset, size, rows);
 }
 
 /// Enter on a score row: show the finding it scores.
@@ -439,6 +531,9 @@ fn jump_to_evidence(app: &mut App) {
         app.status = Some("this evidence is a value, there is nothing to jump to".into());
         return;
     };
+    if let Target::Range { offset, len } = target {
+        return jump_to_range(app, offset, len);
+    }
     match jump::resolve(report, &target) {
         Ok((tab, mut row)) => {
             let here = location(app);
@@ -640,9 +735,9 @@ mod tests {
         assert_eq!(a.tab, Tab::Sections);
         update(&mut a, key(KeyCode::Char('1')));
         update(&mut a, key(KeyCode::BackTab));
-        assert_eq!(a.tab, Tab::Explain, "wraps around");
+        assert_eq!(a.tab, Tab::Hex, "wraps around");
         update(&mut a, key(KeyCode::Char('9')));
-        assert_eq!(a.tab, Tab::Explain, "no such tab: ignored");
+        assert_eq!(a.tab, Tab::Hex, "no such tab: ignored");
     }
 
     #[test]
@@ -1583,5 +1678,156 @@ mod explain_tests {
             assert!(update(&mut a, key(k)).is_empty());
         }
         assert_eq!(a.tab, Tab::Explain);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod hex_tests {
+    use ratatui::crossterm::event::KeyCode;
+    use rtriage_core::Evidence;
+
+    use super::*;
+    use crate::app::{Focus, Tab};
+    use crate::testkit::{key, ready_app, suspicious_pe};
+
+    fn app() -> App {
+        ready_app("s.exe", suspicious_pe(), (100, 30))
+    }
+
+    fn type_keys(a: &mut App, text: &str) {
+        for c in text.chars() {
+            update(a, key(KeyCode::Char(c)));
+        }
+    }
+
+    fn select_range(a: &mut App) {
+        let r = a.report().unwrap();
+        let f = r
+            .findings
+            .iter()
+            .position(|f| f.id == "PE-OVERLAY-HIGH-ENTROPY")
+            .unwrap();
+        a.panes.findings.select(f);
+        finding_changed(a);
+        update(a, key(KeyCode::Right));
+        assert!(matches!(
+            a.report().unwrap().findings[f].evidence[0],
+            Evidence::Range { .. }
+        ));
+    }
+
+    #[test]
+    fn seven_and_tab_reach_the_hex_tab() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Char('7')));
+        assert_eq!(a.tab, Tab::Hex);
+        update(&mut a, key(KeyCode::Tab));
+        assert_eq!(a.tab, Tab::Findings, "wraps after Hex");
+    }
+
+    #[test]
+    fn range_jump_highlights_bytes_and_back_returns() {
+        let mut a = app();
+        select_range(&mut a);
+        update(&mut a, key(KeyCode::Enter));
+        assert_eq!(a.tab, Tab::Hex);
+        let h = &a.panes.hex;
+        assert_eq!(h.cursor, 3072);
+        assert_eq!(h.highlight, Some((3072, 3072 + 4096)));
+        assert!(h.info.as_ref().unwrap().entropy.unwrap() > 7.5);
+        assert!(h.top <= 3072 && 3072 < h.top + 16 * a.list_rows() as u64);
+        update(&mut a, key(KeyCode::Backspace));
+        assert_eq!(a.tab, Tab::Findings);
+        assert_eq!(a.panes.focus, Focus::Evidence);
+    }
+
+    #[test]
+    fn range_past_eof_does_not_jump() {
+        let mut a = app();
+        if let Phase::Ready(r) = &mut a.phase {
+            r.findings[0].evidence[0] = Evidence::Range {
+                offset: 1 << 40,
+                len: 16,
+            };
+        }
+        a.panes.findings.select(0);
+        finding_changed(&mut a);
+        update(&mut a, key(KeyCode::Right));
+        update(&mut a, key(KeyCode::Enter));
+        assert_eq!(a.tab, Tab::Findings);
+        assert!(a.status.clone().unwrap().contains("past the end"));
+    }
+
+    #[test]
+    fn hex_keys_move_the_cursor() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Char('7')));
+        update(&mut a, key(KeyCode::Down));
+        update(&mut a, key(KeyCode::Right));
+        assert_eq!(a.panes.hex.cursor, 17);
+        update(&mut a, key(KeyCode::Left));
+        update(&mut a, key(KeyCode::Up));
+        assert_eq!(a.panes.hex.cursor, 0);
+        update(&mut a, key(KeyCode::End));
+        let last = a.input.size() - 1;
+        assert_eq!(a.panes.hex.cursor, last);
+        assert!(a.panes.hex.top <= last);
+        update(&mut a, key(KeyCode::PageUp));
+        assert_eq!(a.panes.hex.cursor, last - 16 * a.list_rows() as u64);
+        update(&mut a, key(KeyCode::Home));
+        assert_eq!((a.panes.hex.cursor, a.panes.hex.top), (0, 0));
+    }
+
+    #[test]
+    fn goto_offset_moves_the_cursor() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Char('7')));
+        update(&mut a, key(KeyCode::Char('g')));
+        assert_eq!(a.goto.as_deref(), Some(""));
+        type_keys(&mut a, "0x400");
+        update(&mut a, key(KeyCode::Enter));
+        assert_eq!(a.goto, None);
+        assert_eq!(a.panes.hex.cursor, 0x400);
+        update(&mut a, key(KeyCode::Char('g')));
+        type_keys(&mut a, "16");
+        update(&mut a, key(KeyCode::Enter));
+        assert_eq!(a.panes.hex.cursor, 16);
+    }
+
+    #[test]
+    fn goto_offset_past_eof_notes() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Char('7')));
+        update(&mut a, key(KeyCode::Char('g')));
+        type_keys(&mut a, "0xffffffff");
+        update(&mut a, key(KeyCode::Enter));
+        assert_eq!(a.panes.hex.cursor, 0, "cursor stays");
+        assert!(a.status.clone().unwrap().contains("past the end"));
+    }
+
+    #[test]
+    fn goto_rejects_garbage_and_takes_every_key() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Char('7')));
+        update(&mut a, key(KeyCode::Char('g')));
+        type_keys(&mut a, "q1?");
+        assert_eq!(a.goto.as_deref(), Some("q1?"));
+        update(&mut a, key(KeyCode::Enter));
+        assert!(a.status.clone().unwrap().contains("not an offset"));
+        update(&mut a, key(KeyCode::Char('g')));
+        type_keys(&mut a, &"9".repeat(100));
+        assert_eq!(a.goto.as_ref().unwrap().len(), crate::hex::MAX_GOTO_CHARS);
+        update(&mut a, key(KeyCode::Esc));
+        assert_eq!(a.goto, None);
+    }
+
+    #[test]
+    fn hex_has_no_search_or_copy() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Char('7')));
+        update(&mut a, key(KeyCode::Char('/')));
+        assert_eq!(a.prompt, None);
+        assert!(update(&mut a, key(KeyCode::Char('y'))).is_empty());
     }
 }

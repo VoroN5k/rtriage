@@ -1,10 +1,10 @@
 ---
 source: crates/rtriage-tui/src/view/strings.rs
-assertion_line: 157
+assertion_line: 162
 expression: "render(&app((120, 40)))"
 ---
 " rtriage  [CLEAN-LOOKING (score 0)]  s.bin · unknown format · 1 bytes                                                   "
-" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain                                                   "
+" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain │ 7 Hex                                           "
 "┌ Strings (6 of 6) · f filter · x clear ───────────────────────────────────────────────────────────────────────────────┐"
 "│Offset     Enc   Len    Kinds            Value                                                                        │"
 "│0x00000010 ascii 12                      kernel32.dll                                                                 │"
@@ -42,4 +42,4 @@ expression: "render(&app((120, 40)))"
 "│                                                                                                                      │"
 "│                                                                                                                      │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" ? help · Tab/1-6 tabs · / search · Backspace back · q quit                                                             "
+" ? help · Tab/1-7 tabs · / search · Backspace back · q quit                                                             "

@@ -172,7 +172,7 @@ pub fn target(app: &App) -> Option<Copyable> {
                 verbatim: false,
             },
         }),
-        Tab::Explain => None,
+        Tab::Explain | Tab::Hex => None,
     }
 }
 

@@ -4,7 +4,7 @@ assertion_line: 86
 expression: screen
 ---
 " rtriage  [INCOMPLETE (score so far 0)]  sample.exe · PE · 512 bytes            "
-" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain           "
+" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain │ 7 Hex   "
 "┌ ▶ Findings (0) ────────────────┐┌ Details ───────────────────────────────────┐"
 "│No findings.                    ││                                            │"
 "│                                ││                                            │"
@@ -26,4 +26,4 @@ expression: screen
 "│                                ││                                            │"
 "│                                ││                                            │"
 "└────────────────────────────────┘└────────────────────────────────────────────┘"
-" PARTIAL: cancelled, results incomplete  ? help · Tab/1-6 tabs · / search · Back"
+" PARTIAL: cancelled, results incomplete  ? help · Tab/1-7 tabs · / search · Back"

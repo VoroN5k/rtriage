@@ -12,6 +12,7 @@
 mod app;
 mod copy;
 mod filter;
+mod hex;
 mod jump;
 mod list;
 mod model;
@@ -27,6 +28,7 @@ mod view;
 pub use app::{is_partial, App, Focus, Panes, PendingCopy, Phase, Tab, MIN_SIZE};
 pub use copy::{osc52, CopyError, Mux, OSC52_LIMIT};
 pub use filter::{FilterDialog, StringFilter};
+pub use hex::{HexState, ROW_BYTES};
 pub use jump::{History, Location, RangeInfo, Target, RANGE_ENTROPY_CAP};
 pub use list::ListState;
 pub use msg::{from_event, Cmd, Msg};

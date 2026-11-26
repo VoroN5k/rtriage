@@ -1,10 +1,10 @@
 ---
 source: crates/rtriage-tui/src/view/explain.rs
-assertion_line: 162
+assertion_line: 165
 expression: screen
 ---
 " rtriage  [HIGH (score 61)]  s.exe · PE · 7.0 KiB (7168 bytes)                                                          "
-" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain                                                   "
+" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain │ 7 Hex                                           "
 "┌ Score ───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
 "│score 61 = sum of the points below · level HIGH                                                                       │"
 "│caps used: anomaly 13/20 · injection 40/40 · network 4/40 · packing 4/30 · low severity 10/15                         │"
@@ -42,4 +42,4 @@ expression: screen
 "│                                                                                                                      │"
 "│                                                                                                                      │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" ? help · Tab/1-6 tabs · / search · Backspace back · q quit                                                             "
+" ? help · Tab/1-7 tabs · / search · Backspace back · q quit                                                             "

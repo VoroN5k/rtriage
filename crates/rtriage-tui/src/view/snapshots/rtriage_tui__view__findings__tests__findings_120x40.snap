@@ -1,10 +1,10 @@
 ---
 source: crates/rtriage-tui/src/view/findings.rs
-assertion_line: 281
+assertion_line: 274
 expression: "render(&ready_app(\"s.exe\", suspicious_pe(), (120, 40)))"
 ---
 " rtriage  [HIGH (score 61)]  s.exe · PE · 7.0 KiB (7168 bytes)                                                          "
-" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain                                                   "
+" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain │ 7 Hex                                           "
 "┌ ▶ Findings (8) ────────────────────────────────┐┌ Details ───────────────────────────────────────────────────────────┐"
 "│HIGH  PE-API-INJECTION Process injection API cha││Process injection API chain                                         │"
 "│MED   PE-SECTION-RWX Writable and executable sec││HIGH · confidence high · injection · PE-API-INJECTION               │"
@@ -42,4 +42,4 @@ expression: "render(&ready_app(\"s.exe\", suspicious_pe(), (120, 40)))"
 "│                                                ││                                                                    │"
 "│                                                ││                                                                    │"
 "└────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────┘"
-" ? help · Tab/1-6 tabs · / search · Backspace back · q quit                                                             "
+" ? help · Tab/1-7 tabs · / search · Backspace back · q quit                                                             "

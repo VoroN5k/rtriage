@@ -1,10 +1,10 @@
 ---
 source: crates/rtriage-tui/src/view/sections.rs
-assertion_line: 129
+assertion_line: 132
 expression: render(&app)
 ---
 " rtriage  [CLEAN-LOOKING (score 0)]  t.elf · ELF · 9.0 KiB (9168 bytes)                                                 "
-" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain                                                   "
+" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain │ 7 Hex                                           "
 "┌ Segments (9) · s: section headers ───────────────────────────────────────────────────────────────────────────────────┐"
 "│#   Type                                                        Perm Offset     VAddr      FileSz    MemSz     Entropy│"
 "│0   PHDR                                                        r--  0x00000040 0x40       0x1f8     0x1f8     -      │"
@@ -42,4 +42,4 @@ expression: render(&app)
 "│                                                                                                                      │"
 "│                                                                                                                      │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" ? help · Tab/1-6 tabs · / search · Backspace back · q quit                                                             "
+" ? help · Tab/1-7 tabs · / search · Backspace back · q quit                                                             "

@@ -162,6 +162,7 @@ pub fn searchable<'a>(
             Box::new(move |r| ioc(report, r, raw).map(|c| c.join(" ")))
         }
         Tab::Explain => Box::new(move |r| explain(report, r).map(|c| c.join(" "))),
+        Tab::Hex => return None,
     })
 }
 

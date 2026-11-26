@@ -8,12 +8,12 @@ use ratatui::Frame;
 use super::centered;
 
 /// Key, description. Grows as later steps add keys.
-const KEYS: [(&str, &str); 17] = [
-    ("1-6", "switch tab"),
+const KEYS: [(&str, &str); 18] = [
+    ("1-7", "switch tab"),
     ("Tab / Shift-Tab", "next / previous tab"),
     ("↑↓ j k", "move"),
     ("PgUp PgDn Home End", "move by page / to the ends"),
-    ("← → h l", "findings list / evidence"),
+    ("← → h l", "findings list / evidence; Hex: byte"),
     ("Enter", "select; on evidence or a score row: jump to it"),
     ("Backspace / Alt-←", "go back"),
     (
@@ -26,6 +26,7 @@ const KEYS: [(&str, &str); 17] = [
         "Strings: filter by class and length / clear filter",
     ),
     ("d", "IOCs: show raw / defanged values"),
+    ("g", "Hex: go to an offset (decimal or 0x hex)"),
     ("y / Y", "copy sanitized+defanged / copy raw (asks first)"),
     ("?", "toggle this help"),
     (

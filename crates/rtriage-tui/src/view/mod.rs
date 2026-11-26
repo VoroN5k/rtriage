@@ -4,6 +4,7 @@
 mod explain;
 mod findings;
 mod help;
+mod hex;
 mod imports;
 mod iocs;
 mod loading;
@@ -193,6 +194,7 @@ fn ready(app: &App, report: &Report, frame: &mut Frame<'_>, area: Rect) {
         Tab::Strings => strings::draw(app, report, frame, body),
         Tab::Iocs => iocs::draw(app, report, frame, body),
         Tab::Explain => explain::draw(app, report, frame, body),
+        Tab::Hex => hex::draw(app, frame, body),
     }
 
     let mut status_spans = Vec::new();
@@ -202,14 +204,22 @@ fn ready(app: &App, report: &Report, frame: &mut Frame<'_>, area: Rect) {
             Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
         ));
     }
-    if let Some(text) = &app.prompt {
-        // What the user types is shown escaped like everything else.
+    // What the user types is shown escaped like everything else.
+    let typing = match (&app.prompt, &app.goto) {
+        (Some(text), _) => Some((format!(" /{}▏", single_line(text)), "Enter search")),
+        (None, Some(text)) => Some((
+            format!(" go to offset: {}▏", single_line(text)),
+            "decimal or 0x hex · Enter go",
+        )),
+        (None, None) => None,
+    };
+    if let Some((field, action)) = typing {
         status_spans.push(Span::styled(
-            format!(" /{}▏", single_line(text)),
+            field,
             Style::new().add_modifier(Modifier::BOLD),
         ));
         status_spans.push(Span::styled(
-            "  Enter search · Esc cancel",
+            format!("  {action} · Esc cancel"),
             Style::new().add_modifier(Modifier::DIM),
         ));
         frame.render_widget(Line::from(status_spans), status);
@@ -222,7 +232,7 @@ fn ready(app: &App, report: &Report, frame: &mut Frame<'_>, area: Rect) {
             Style::new().add_modifier(Modifier::BOLD),
         )),
         None => status_spans.push(Span::styled(
-            " ? help · Tab/1-6 tabs · / search · Backspace back · q quit",
+            " ? help · Tab/1-7 tabs · / search · Backspace back · q quit",
             Style::new().add_modifier(Modifier::DIM),
         )),
     }

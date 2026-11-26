@@ -1,10 +1,10 @@
 ---
 source: crates/rtriage-tui/src/view/findings.rs
-assertion_line: 300
+assertion_line: 293
 expression: screen
 ---
 " rtriage  [HIGH (score 61)]  s.exe · PE · 7.0 KiB (7168 bytes)                                                          "
-" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain                                                   "
+" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain │ 7 Hex                                           "
 "┌ Findings (8) ──────────────────────────────────┐┌ ▶ Details ─────────────────────────────────────────────────────────┐"
 "│HIGH  PE-API-INJECTION Process injection API cha││Appended data looks compressed or encrypted                         │"
 "│MED   PE-SECTION-RWX Writable and executable sec││LOW · confidence medium · packing · PE-OVERLAY-HIGH-ENTROPY         │"
@@ -42,4 +42,4 @@ expression: screen
 "│                                                ││                                                                    │"
 "│                                                ││                                                                    │"
 "└────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────┘"
-" ? help · Tab/1-6 tabs · / search · Backspace back · q quit                                                             "
+" ? help · Tab/1-7 tabs · / search · Backspace back · q quit                                                             "

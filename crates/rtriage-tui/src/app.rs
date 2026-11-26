@@ -5,6 +5,7 @@ use std::sync::Arc;
 use rtriage_core::{AnalysisLimit, Input, Report};
 
 use crate::filter::{FilterDialog, StringFilter};
+use crate::hex::HexState;
 use crate::jump::{History, RangeInfo};
 use crate::list::ListState;
 
@@ -26,17 +27,20 @@ pub enum Tab {
     Iocs,
     /// Score breakdown and suppressed findings.
     Explain,
+    /// Read-only hex dump of the file.
+    Hex,
 }
 
 impl Tab {
     /// Tabs shown in the tab bar, in order; key `1` selects the first.
-    pub const ALL: [Tab; 6] = [
+    pub const ALL: [Tab; 7] = [
         Tab::Findings,
         Tab::Sections,
         Tab::Imports,
         Tab::Strings,
         Tab::Iocs,
         Tab::Explain,
+        Tab::Hex,
     ];
 
     /// Tab-bar label.
@@ -48,6 +52,7 @@ impl Tab {
             Tab::Strings => "Strings",
             Tab::Iocs => "IOCs",
             Tab::Explain => "Explain",
+            Tab::Hex => "Hex",
         }
     }
 
@@ -120,6 +125,8 @@ pub struct Panes {
     pub iocs: ListState,
     /// Score breakdown rows (Explain tab).
     pub explain: ListState,
+    /// Hex view cursor, scroll and highlight.
+    pub hex: HexState,
     /// Show IOCs as found instead of defanged.
     pub raw_iocs: bool,
     /// Details of the selected evidence item if it is a byte range.
@@ -137,6 +144,7 @@ impl Panes {
             Tab::Strings => Some(&mut self.strings),
             Tab::Iocs => Some(&mut self.iocs),
             Tab::Explain => Some(&mut self.explain),
+            Tab::Hex => None,
         }
     }
 
@@ -150,6 +158,7 @@ impl Panes {
             Tab::Strings => Some(&self.strings),
             Tab::Iocs => Some(&self.iocs),
             Tab::Explain => Some(&self.explain),
+            Tab::Hex => None,
         }
     }
 }
@@ -181,6 +190,8 @@ pub struct App {
     pub query: Option<String>,
     /// Strings filter dialog, while open (keys go to it).
     pub filter_dialog: Option<FilterDialog>,
+    /// Offset being typed after `g` in the Hex tab.
+    pub goto: Option<String>,
     /// A raw copy waiting for `y` (anything else cancels it).
     pub confirm: Option<PendingCopy>,
 }
@@ -202,6 +213,7 @@ impl App {
             query: None,
             filter_dialog: None,
             confirm: None,
+            goto: None,
         }
     }
 

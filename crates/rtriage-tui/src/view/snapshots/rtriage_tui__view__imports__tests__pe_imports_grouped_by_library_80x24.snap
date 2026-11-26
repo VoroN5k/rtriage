@@ -1,10 +1,10 @@
 ---
 source: crates/rtriage-tui/src/view/imports.rs
-assertion_line: 98
+assertion_line: 107
 expression: screen
 ---
 " rtriage  [HIGH (score 61)]  s.exe · PE · 7.0 KiB (7168 bytes)                  "
-" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain           "
+" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain │ 7 Hex   "
 "┌ Imports (6 functions from 2 DLLs) · imphash a5d16a5b1af871bd76e1b4c7a4e5b1ab ┐"
 "│Library                     Symbol                                            │"
 "│KERNEL32.dll                OpenProcess                                       │"
@@ -26,4 +26,4 @@ expression: screen
 "│                                                                              │"
 "│                                                                              │"
 "└──────────────────────────────────────────────────────────────────────────────┘"
-" ? help · Tab/1-6 tabs · / search · Backspace back · q quit                     "
+" ? help · Tab/1-7 tabs · / search · Backspace back · q quit                     "

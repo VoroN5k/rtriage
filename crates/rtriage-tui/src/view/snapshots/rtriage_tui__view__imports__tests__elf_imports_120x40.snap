@@ -1,10 +1,10 @@
 ---
 source: crates/rtriage-tui/src/view/imports.rs
-assertion_line: 105
+assertion_line: 114
 expression: render(&app)
 ---
 " rtriage  [CLEAN-LOOKING (score 0)]  t.elf · ELF · 9.0 KiB (9168 bytes)                                                 "
-" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain                                                   "
+" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain │ 7 Hex                                           "
 "┌ Imported symbols (10) · needed: libc.so.6 ───────────────────────────────────────────────────────────────────────────┐"
 "│Symbol                                                                                                                │"
 "│__libc_start_main                                                                                                     │"
@@ -42,4 +42,4 @@ expression: render(&app)
 "│                                                                                                                      │"
 "│                                                                                                                      │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" ? help · Tab/1-6 tabs · / search · Backspace back · q quit                                                             "
+" ? help · Tab/1-7 tabs · / search · Backspace back · q quit                                                             "

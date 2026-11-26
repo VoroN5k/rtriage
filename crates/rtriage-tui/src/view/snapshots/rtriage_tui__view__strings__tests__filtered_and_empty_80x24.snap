@@ -1,10 +1,10 @@
 ---
 source: crates/rtriage-tui/src/view/strings.rs
-assertion_line: 177
+assertion_line: 182
 expression: screen
 ---
 " rtriage  [CLEAN-LOOKING (score 0)]  s.bin · unknown format · 1 bytes           "
-" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain           "
+" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain │ 7 Hex   "
 "┌ Strings (2 of 6 · filter url) · f filter · x clear ──────────────────────────┐"
 "│Offset     Enc   Len    Kinds            Value                                │"
 "│0x00000040 ascii 34     domain,url       http://c2.evil-example.ru/gate.php   │"

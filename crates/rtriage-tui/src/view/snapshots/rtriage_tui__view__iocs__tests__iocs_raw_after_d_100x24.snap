@@ -1,10 +1,10 @@
 ---
 source: crates/rtriage-tui/src/view/iocs.rs
-assertion_line: 144
+assertion_line: 158
 expression: screen
 ---
 " rtriage  [HIGH (score 61)]  s.exe · PE · 7.0 KiB (7168 bytes)                                      "
-" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain                               "
+" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain │ 7 Hex                       "
 "┌ File hashes · y copy ────────────────────────────────────────────────────────────────────────────┐"
 "│md5     7306f2dd066822905457018ca9a9b6ed                                                          │"
 "│sha1    03dbba0973a6bc112b8164d373f9d93da58c8849                                                  │"
@@ -26,4 +26,4 @@ expression: screen
 "│                                                                                                  │"
 "│                                                                                                  │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" ? help · Tab/1-6 tabs · / search · Backspace back · q quit                                         "
+" ? help · Tab/1-7 tabs · / search · Backspace back · q quit                                         "
