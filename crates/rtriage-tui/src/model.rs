@@ -95,11 +95,6 @@ pub fn import_row(report: &Report, library: Option<&str>, symbol: &str) -> Optio
     })
 }
 
-/// Rows of the Strings pane.
-pub fn string_count(report: &Report) -> usize {
-    report.facts.strings.as_ref().map_or(0, |s| s.items.len())
-}
-
 /// Row of the string starting at `offset` (items are sorted by offset).
 pub fn string_row(report: &Report, offset: u64) -> Option<usize> {
     let items = &report.facts.strings.as_ref()?.items;

@@ -118,7 +118,7 @@ pub fn imports(report: &Report) -> Vec<[String; 2]> {
         .collect()
 }
 
-/// Text of a strings row: offset, encoding and value.
+/// Searchable text of string item `row`: offset and value.
 pub fn string(report: &Report, row: usize) -> Option<String> {
     let s = report.facts.strings.as_ref()?.items.get(row)?;
     Some(format!("0x{:08x} {}", s.offset, single_line(&s.value)))
@@ -149,7 +149,13 @@ pub fn searchable<'a>(
                 })
             })
         }
-        Tab::Strings => Box::new(move |r| string(report, r)),
+        Tab::Strings => {
+            let visible = &app.panes.string_rows;
+            Box::new(move |r| {
+                let item = usize::try_from(*visible.get(r)?).ok()?;
+                string(report, item)
+            })
+        }
         Tab::Iocs | Tab::Explain => return None,
     })
 }

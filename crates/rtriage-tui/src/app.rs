@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use rtriage_core::{AnalysisLimit, Input, Report};
 
+use crate::filter::{FilterDialog, StringFilter};
 use crate::jump::{History, RangeInfo};
 use crate::list::ListState;
 
@@ -109,7 +110,12 @@ pub struct Panes {
     /// Imports list.
     pub imports: ListState,
     /// Strings list.
+    /// Strings list; its rows are `string_rows`, not item indices.
     pub strings: ListState,
+    /// Item index of every visible string (all of them without a filter).
+    pub string_rows: Vec<u32>,
+    /// Active strings filter.
+    pub string_filter: StringFilter,
     /// Details of the selected evidence item if it is a byte range.
     pub range: Option<RangeInfo>,
 }
@@ -165,6 +171,8 @@ pub struct App {
     pub prompt: Option<String>,
     /// Last applied search, used by `n` / `N` in any tab.
     pub query: Option<String>,
+    /// Strings filter dialog, while open (keys go to it).
+    pub filter_dialog: Option<FilterDialog>,
 }
 
 impl App {
@@ -182,6 +190,7 @@ impl App {
             status: None,
             prompt: None,
             query: None,
+            filter_dialog: None,
         }
     }
 

@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 
 mod app;
+mod filter;
 mod jump;
 mod list;
 mod model;
@@ -23,6 +24,7 @@ mod update;
 mod view;
 
 pub use app::{is_partial, App, Focus, Panes, Phase, Tab, MIN_SIZE};
+pub use filter::{FilterDialog, StringFilter};
 pub use jump::{History, Location, RangeInfo, Target, RANGE_ENTROPY_CAP};
 pub use list::ListState;
 pub use msg::{from_event, Cmd, Msg};

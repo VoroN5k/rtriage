@@ -6,6 +6,7 @@ mod help;
 mod imports;
 mod loading;
 mod sections;
+mod strings;
 mod table;
 
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -29,6 +30,9 @@ pub fn view(app: &App, frame: &mut Frame<'_>) {
         Phase::Loading { cancel_sent } => loading::draw(app, *cancel_sent, frame, area),
         Phase::Failed => failed(frame, area),
         Phase::Ready(report) => ready(app, report, frame, area),
+    }
+    if let Some(d) = &app.filter_dialog {
+        strings::dialog(d, frame, area);
     }
     if app.help {
         help::draw(frame, area);
@@ -184,6 +188,7 @@ fn ready(app: &App, report: &Report, frame: &mut Frame<'_>, area: Rect) {
         Tab::Findings => findings::draw(app, report, frame, body),
         Tab::Sections => sections::draw(app, report, frame, body),
         Tab::Imports => imports::draw(app, report, frame, body),
+        Tab::Strings => strings::draw(app, report, frame, body),
         _ => {
             let block = Block::new()
                 .borders(Borders::ALL)

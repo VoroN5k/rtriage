@@ -64,6 +64,59 @@ pub fn analyze(input: &Input) -> Report {
     Registry::default().analyze(input, &Config::default())
 }
 
+/// One synthetic extracted string.
+pub fn string(
+    offset: u64,
+    value: &str,
+    kinds: &[rtriage_core::report::StringKind],
+) -> rtriage_core::report::ExtractedString {
+    rtriage_core::report::ExtractedString {
+        offset,
+        encoding: rtriage_core::report::StringEncoding::Ascii,
+        len: u64::try_from(value.chars().count()).unwrap(),
+        value: value.to_owned(),
+        truncated: false,
+        kinds: kinds.to_vec(),
+    }
+}
+
+/// `App` whose report holds exactly `items` as its strings.
+pub fn strings_app(items: Vec<rtriage_core::report::ExtractedString>, size: (u16, u16)) -> App {
+    let mut app = App::new(Arc::new(Input::from_bytes("s.bin", b"x".to_vec())), size);
+    let mut report = analyze(&app.input);
+    let total = u64::try_from(items.len()).unwrap();
+    report.facts.strings = Some(rtriage_core::report::StringsFacts {
+        min_len: 5,
+        total,
+        limit_reached: false,
+        items_included: rtriage_core::StringsIncluded::All,
+        items,
+    });
+    update(&mut app, Msg::AnalysisDone(Box::new(report)));
+    app
+}
+
+/// Strings of several classes and lengths, sorted by offset.
+pub fn mixed_strings() -> Vec<rtriage_core::report::ExtractedString> {
+    use rtriage_core::report::StringKind as K;
+    vec![
+        string(0x10, "kernel32.dll", &[]),
+        string(
+            0x40,
+            "http://c2.evil-example.ru/gate.php",
+            &[K::Domain, K::Url],
+        ),
+        string(0x80, "10.0.0.1", &[K::Ipv4]),
+        string(0xc0, "http://a.ru/", &[K::Domain, K::Url]),
+        string(
+            0x100,
+            r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run",
+            &[K::RegistryKey],
+        ),
+        string(0x200, "just a plain sentence here", &[]),
+    ]
+}
+
 /// The screen for `app` at its own size, as text.
 pub fn render(app: &App) -> String {
     let (w, h) = app.size;

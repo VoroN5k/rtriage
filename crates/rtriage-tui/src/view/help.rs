@@ -8,7 +8,7 @@ use ratatui::Frame;
 use super::centered;
 
 /// Key, description. Grows as later steps add keys.
-const KEYS: [(&str, &str); 14] = [
+const KEYS: [(&str, &str); 15] = [
     ("1-6", "switch tab"),
     ("Tab / Shift-Tab", "next / previous tab"),
     ("↑↓ j k", "move"),
@@ -21,6 +21,10 @@ const KEYS: [(&str, &str); 14] = [
         "search this list (case-insensitive) · next · previous",
     ),
     ("s", "Sections tab of an ELF: section headers / segments"),
+    (
+        "f / x",
+        "Strings: filter by class and length / clear filter",
+    ),
     ("?", "toggle this help"),
     (
         "Esc",
@@ -28,7 +32,7 @@ const KEYS: [(&str, &str); 14] = [
     ),
     ("q / Ctrl-C", "quit (cancels a running analysis)"),
     ("", "→ evidence opens another tab · ~ suppressed finding"),
-    ("", "the search box takes every key until Enter or Esc"),
+    ("", "search box and filter dialog take keys until Enter/Esc"),
 ];
 
 pub(super) fn draw(frame: &mut Frame<'_>, area: Rect) {

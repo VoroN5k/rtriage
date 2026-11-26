@@ -4,6 +4,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::{App, Focus, Panes, Phase, Tab};
+use crate::filter::{self, FilterDialog, StringFilter};
 use crate::jump::{self, Location, Target};
 use crate::list::ListState;
 use crate::model;
@@ -29,9 +30,15 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
                 sections: ListState::new(model::section_count(&report)),
                 segments: ListState::new(rows::segment_count(&report)),
                 imports: ListState::new(model::import_rows(&report).len()),
-                strings: ListState::new(model::string_count(&report)),
+                string_rows: report
+                    .facts
+                    .strings
+                    .as_ref()
+                    .map(|s| filter::rebuild(&s.items, &StringFilter::default()))
+                    .unwrap_or_default(),
                 ..Panes::default()
             };
+            app.panes.strings = ListState::new(app.panes.string_rows.len());
             app.phase = Phase::Ready(report);
             finding_changed(app);
             Vec::new()
@@ -48,6 +55,10 @@ fn on_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
     let ctrl_c = key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
     if ctrl_c {
         return quit(app);
+    }
+    if app.filter_dialog.is_some() {
+        dialog_key(app, key.code);
+        return Vec::new();
     }
     if app.prompt.is_some() {
         prompt_key(app, key.code);
@@ -69,6 +80,8 @@ fn on_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
         KeyCode::Char('n') => search_step(app, Direction::Next),
         KeyCode::Char('N') => search_step(app, Direction::Previous),
         KeyCode::Char('s') if app.tab == Tab::Sections => toggle_segments(app),
+        KeyCode::Char('f') if app.tab == Tab::Strings => open_filter_dialog(app),
+        KeyCode::Char('x') if app.tab == Tab::Strings => clear_string_filter(app),
         KeyCode::Tab => app.tab = app.tab.cycle(1),
         KeyCode::BackTab => app.tab = app.tab.cycle(-1),
         KeyCode::Char(c @ '1'..='9') => {
@@ -148,6 +161,94 @@ fn search_step(app: &mut App, dir: Direction) {
         "\"{shown}\": match {} of {}{wrapped} · n next · N previous",
         found.nth, found.total
     ));
+}
+
+/// Keys while the strings filter dialog is open.
+fn dialog_key(app: &mut App, code: KeyCode) {
+    let Some(d) = app.filter_dialog.as_mut() else {
+        return;
+    };
+    match code {
+        KeyCode::Esc => app.filter_dialog = None,
+        KeyCode::Up | KeyCode::Char('k') => d.move_by(-1),
+        KeyCode::Down | KeyCode::Char('j') => d.move_by(1),
+        KeyCode::Char(' ') => d.toggle(),
+        KeyCode::Char(c) => d.digit(c),
+        KeyCode::Backspace => d.backspace(),
+        KeyCode::Enter => match d.to_filter() {
+            Ok(filter) => {
+                app.filter_dialog = None;
+                app.panes.string_filter = filter;
+                apply_string_filter(app);
+            }
+            Err(why) => app.status = Some(why),
+        },
+        _ => {}
+    }
+}
+
+fn open_filter_dialog(app: &mut App) {
+    if app.report().is_some_and(|r| r.facts.strings.is_some()) {
+        app.filter_dialog = Some(FilterDialog::new(&app.panes.string_filter));
+    } else {
+        app.status = Some("no strings to filter".into());
+    }
+}
+
+fn clear_string_filter(app: &mut App) {
+    if app.panes.string_filter.is_active() {
+        app.panes.string_filter = StringFilter::default();
+        apply_string_filter(app);
+    } else {
+        app.status = Some("no filter to clear".into());
+    }
+}
+
+/// Rebuilds the visible strings for the current filter, keeping the cursor
+/// on the same string (or the next one shown) when possible.
+fn apply_string_filter(app: &mut App) {
+    let p = &mut app.panes;
+    let before = p
+        .strings
+        .selected()
+        .and_then(|r| p.string_rows.get(r))
+        .copied();
+    let (rows, total) = match app.phase {
+        Phase::Ready(ref r) => r.facts.strings.as_ref().map_or((Vec::new(), 0), |s| {
+            (filter::rebuild(&s.items, &p.string_filter), s.items.len())
+        }),
+        _ => (Vec::new(), 0),
+    };
+    p.strings = ListState::new(rows.len());
+    if let Some(item) = before {
+        let at = rows.partition_point(|&i| i < item);
+        p.strings.select(at.min(rows.len().saturating_sub(1)));
+    }
+    let shown = rows.len();
+    p.string_rows = rows;
+    let page = app.rows_for(Tab::Strings);
+    app.panes.strings.follow(page);
+    let what = if app.panes.string_filter.is_active() {
+        format!("filter {}", app.panes.string_filter.describe())
+    } else {
+        "no filter".to_owned()
+    };
+    app.status = Some(format!(
+        "{what}: {shown} of {total} strings · f edit · x clear"
+    ));
+}
+
+/// Visible row of string item `item`; clears a filter that hides it.
+fn visible_string_row(app: &mut App, item: usize) -> Option<usize> {
+    let item = u32::try_from(item).ok()?;
+    if let Ok(row) = app.panes.string_rows.binary_search(&item) {
+        return Some(row);
+    }
+    app.panes.string_filter = StringFilter::default();
+    apply_string_filter(app);
+    let row = app.panes.string_rows.binary_search(&item).ok();
+    app.status = Some("strings filter cleared to show this string".into());
+    row
 }
 
 fn toggle_segments(app: &mut App) {
@@ -260,12 +361,19 @@ fn jump_to_evidence(app: &mut App) {
         return;
     };
     match jump::resolve(report, &target) {
-        Ok((tab, row)) => {
+        Ok((tab, mut row)) => {
             let here = location(app);
             let rows = app.rows_for(tab);
             if tab == Tab::Sections {
                 // Section evidence names section headers, not segments.
                 app.panes.show_segments = false;
+            }
+            if tab == Tab::Strings {
+                // `row` is an item index; the list shows filtered rows.
+                let Some(visible) = visible_string_row(app, row) else {
+                    return;
+                };
+                row = visible;
             }
             if let Some(list) = app.panes.list_mut(tab) {
                 list.select(row);
@@ -938,5 +1046,201 @@ mod search_tests {
         update(&mut a, key(KeyCode::Enter));
         assert_eq!(a.tab, Tab::Sections, "{:?}", a.status);
         assert!(!a.panes.show_segments);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod strings_tests {
+    use ratatui::crossterm::event::KeyCode;
+    use rtriage_core::report::StringKind;
+    use rtriage_core::Evidence;
+
+    use super::*;
+    use crate::app::Tab;
+    use crate::filter::FilterDialog;
+    use crate::testkit::{key, mixed_strings, strings_app};
+
+    fn app() -> App {
+        let mut a = strings_app(mixed_strings(), (100, 30));
+        update(&mut a, key(KeyCode::Char('4')));
+        a
+    }
+
+    fn values(a: &App) -> Vec<String> {
+        let items = &a.report().unwrap().facts.strings.as_ref().unwrap().items;
+        a.panes
+            .string_rows
+            .iter()
+            .map(|&i| items[i as usize].value.clone())
+            .collect()
+    }
+
+    fn type_keys(a: &mut App, text: &str) {
+        for c in text.chars() {
+            update(a, key(KeyCode::Char(c)));
+        }
+    }
+
+    #[test]
+    fn all_strings_are_visible_without_a_filter() {
+        let a = app();
+        assert_eq!(a.panes.string_rows, [0, 1, 2, 3, 4, 5]);
+        assert_eq!(a.panes.strings.len(), 6);
+    }
+
+    #[test]
+    fn filter_by_kind_and_length() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Char('f')));
+        assert!(a.filter_dialog.is_some());
+        // Url is the first class; tick it, then go to the minimum length.
+        update(&mut a, key(KeyCode::Char(' ')));
+        for _ in 0..FilterDialog::MIN_ROW {
+            update(&mut a, key(KeyCode::Down));
+        }
+        type_keys(&mut a, "20");
+        update(&mut a, key(KeyCode::Enter));
+        assert!(a.filter_dialog.is_none());
+        assert_eq!(values(&a), ["http://c2.evil-example.ru/gate.php"]);
+        assert_eq!(a.panes.strings.len(), 1);
+        assert!(a.status.clone().unwrap().contains("1 of 6"));
+    }
+
+    #[test]
+    fn dialog_keys_do_not_leak() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Char('f')));
+        type_keys(&mut a, "q?1/n");
+        assert!(a.filter_dialog.is_some());
+        assert_eq!(a.tab, Tab::Strings);
+        assert!(!a.help && a.prompt.is_none());
+        update(&mut a, key(KeyCode::Esc));
+        assert!(a.filter_dialog.is_none());
+        assert_eq!(a.panes.string_rows.len(), 6, "Esc discards the draft");
+    }
+
+    #[test]
+    fn invalid_lengths_keep_the_dialog_open() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Char('f')));
+        for _ in 0..FilterDialog::MIN_ROW {
+            update(&mut a, key(KeyCode::Down));
+        }
+        type_keys(&mut a, "50");
+        update(&mut a, key(KeyCode::Down));
+        type_keys(&mut a, "10");
+        update(&mut a, key(KeyCode::Enter));
+        assert!(a.filter_dialog.is_some());
+        assert!(a.status.clone().unwrap().contains("greater than"));
+    }
+
+    #[test]
+    fn x_clears_the_filter_and_keeps_the_selection() {
+        let mut a = app();
+        a.panes.string_filter.kinds = [StringKind::Ipv4].into();
+        apply_string_filter(&mut a);
+        assert_eq!(values(&a), ["10.0.0.1"]);
+        update(&mut a, key(KeyCode::Char('x')));
+        assert_eq!(a.panes.string_rows.len(), 6);
+        assert_eq!(a.panes.strings.selected(), Some(2), "still on 10.0.0.1");
+    }
+
+    #[test]
+    fn empty_after_filter_is_safe() {
+        let mut a = app();
+        a.panes.string_filter.min_len = Some(10_000);
+        apply_string_filter(&mut a);
+        assert!(a.panes.strings.is_empty());
+        for k in [
+            KeyCode::Enter,
+            KeyCode::Down,
+            KeyCode::End,
+            KeyCode::Char('n'),
+        ] {
+            assert!(update(&mut a, key(k)).is_empty());
+        }
+        update(&mut a, key(KeyCode::Char('/')));
+        type_keys(&mut a, "http");
+        update(&mut a, key(KeyCode::Enter));
+        assert!(a.status.clone().unwrap().contains("no match"));
+    }
+
+    #[test]
+    fn search_runs_over_visible_strings_only() {
+        let mut a = app();
+        a.panes.string_filter.kinds = [StringKind::Url].into();
+        apply_string_filter(&mut a);
+        update(&mut a, key(KeyCode::Char('/')));
+        type_keys(&mut a, "a.ru");
+        update(&mut a, key(KeyCode::Enter));
+        assert_eq!(a.panes.strings.selected(), Some(1));
+        assert!(a.status.clone().unwrap().contains("match 1 of 1"));
+    }
+
+    fn jump_to_string_at(a: &mut App, offset: u64) {
+        if let Phase::Ready(r) = &mut a.phase {
+            let f = rtriage_core::Finding::new(
+                "TEST",
+                rtriage_core::Severity::Info,
+                rtriage_core::Category::Metadata,
+                "t",
+            )
+            .evidence(Evidence::String {
+                offset,
+                encoding: rtriage_core::report::StringEncoding::Ascii,
+                value: "v".into(),
+            });
+            r.findings.insert(0, f);
+            a.panes.findings = ListState::new(r.findings.len());
+        }
+        update(a, key(KeyCode::Char('1')));
+        update(a, key(KeyCode::Home));
+        finding_changed(a);
+        update(a, key(KeyCode::Right));
+        update(a, key(KeyCode::Enter));
+    }
+
+    #[test]
+    fn jump_to_string_maps_to_the_visible_row() {
+        let mut a = app();
+        a.panes.string_filter.kinds = [StringKind::Url].into();
+        apply_string_filter(&mut a);
+        jump_to_string_at(&mut a, 0xc0);
+        assert_eq!(a.tab, Tab::Strings);
+        assert_eq!(a.panes.strings.selected(), Some(1), "second visible row");
+        assert!(a.panes.string_filter.is_active(), "filter kept");
+    }
+
+    #[test]
+    fn jump_to_string_clears_hiding_filter_with_note() {
+        let mut a = app();
+        a.panes.string_filter.kinds = [StringKind::Url].into();
+        apply_string_filter(&mut a);
+        jump_to_string_at(&mut a, 0x80);
+        assert_eq!(a.tab, Tab::Strings);
+        assert!(!a.panes.string_filter.is_active());
+        assert_eq!(a.panes.strings.selected(), Some(2));
+        assert!(a.status.clone().unwrap().contains("filter cleared"));
+    }
+
+    #[test]
+    fn jump_to_string_not_in_capped_list_notes() {
+        let mut a = app();
+        jump_to_string_at(&mut a, 0x9999);
+        assert_eq!(a.tab, Tab::Findings);
+        assert!(a
+            .status
+            .clone()
+            .unwrap()
+            .contains("not in the extracted list"));
+    }
+
+    #[test]
+    fn f_outside_strings_does_nothing() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Char('2')));
+        update(&mut a, key(KeyCode::Char('f')));
+        assert!(a.filter_dialog.is_none());
     }
 }

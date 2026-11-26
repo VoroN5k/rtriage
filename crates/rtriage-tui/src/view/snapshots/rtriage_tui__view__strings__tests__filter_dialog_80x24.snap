@@ -1,0 +1,29 @@
+---
+source: crates/rtriage-tui/src/view/strings.rs
+assertion_line: 166
+expression: render(&a)
+---
+" rtriage  [CLEAN-LOOKING (score 0)]  s.bin · unknown format · 1 bytes           "
+" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain           "
+"┌ Strings (6 of 6) · f filter · x clear ───────────────────────────────────────┐"
+"│Offset     Enc┌ Filter strings ────────────────────────────────┐              │"
+"│0x00000010 asc│  [x] url                                       │              │"
+"│0x00000040 asc│› [ ] ipv4                                      │ru/gate.php   │"
+"│0x00000080 asc│  [ ] ipv6                                      │              │"
+"│0x000000c0 asc│  [ ] domain                                    │              │"
+"│0x00000100 asc│  [ ] email                                     │\Windows\Curre│"
+"│0x00000200 asc│  [ ] file_path                                 │ere           │"
+"│              │  [ ] registry_key                              │              │"
+"│              │  [ ] base64                                    │              │"
+"│              │  [ ] suspicious_command                        │              │"
+"│              │  [ ] crypto_wallet                             │              │"
+"│              │  [ ] user_agent                                │              │"
+"│              │  min length:                                   │              │"
+"│              │  max length:                                   │              │"
+"│              │Space tick · digits · Enter apply · Esc cancel  │              │"
+"│              │no class ticked = any string                    │              │"
+"│              └────────────────────────────────────────────────┘              │"
+"│                                                                              │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" ? help · Tab/1-6 tabs · / search · Backspace back · q quit                     "
