@@ -1,6 +1,9 @@
 //! Report renderers.
 
 pub mod json;
+// Wired into the CLI in the Markdown steps that follow (M6.1 task 4).
+#[allow(dead_code)]
+pub mod md;
 pub mod text;
 
 use rtriage_core::walk::SkipReason;

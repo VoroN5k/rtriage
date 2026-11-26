@@ -39,4 +39,5 @@ workspace = true
 
 [dev-dependencies]
 insta = "1.49.0"
+pulldown-cmark = { version = "0.13.6", default-features = false }
 rtriage-fixtures = { path = "../rtriage-fixtures" }
