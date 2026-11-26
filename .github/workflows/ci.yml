@@ -18,16 +18,18 @@ env:
 
 # Third-party actions are pinned to full commit SHAs (tag in the comment).
 #
-# Every check runs twice: with the default features (what `cargo build`
-# gives users) and with all features (`yara`, plus `test-hooks`, which the
-# worker-isolation tests need and release builds never enable).
+# Every check runs with the default features (what `cargo build` gives
+# users, including the TUI) and with all features (`yara`, plus
+# `test-hooks`, which the worker-isolation tests need and release builds
+# never enable). Lint also runs without default features, so a build
+# without the TUI keeps compiling.
 jobs:
   lint:
     name: fmt, clippy, docs (${{ matrix.features }})
     strategy:
       fail-fast: false
       matrix:
-        features: [default, all]
+        features: [default, all, none]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,8 +42,8 @@ jobs:
           key: features-${{ matrix.features }}
       - run: cargo fmt --all --check
         if: matrix.features == 'default'
-      - run: cargo clippy --workspace --all-targets --locked ${{ matrix.features == 'all' && '--all-features' || '' }} -- -D warnings
-      - run: cargo doc --workspace --no-deps --locked ${{ matrix.features == 'all' && '--all-features' || '' }}
+      - run: cargo clippy --workspace --all-targets --locked ${{ matrix.features == 'all' && '--all-features' || (matrix.features == 'none' && '--no-default-features' || '') }} -- -D warnings
+      - run: cargo doc --workspace --no-deps --locked ${{ matrix.features == 'all' && '--all-features' || (matrix.features == 'none' && '--no-default-features' || '') }}
         env:
           RUSTDOCFLAGS: -D warnings
       # Fuzz targets live outside the workspace; keep them compiling (stable is enough to check).

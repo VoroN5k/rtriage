@@ -12,8 +12,8 @@ input is treated as hostile: parsers are bounded and panic-free, output is
 sanitized against terminal escape injection, and batch runs analyse each
 file in an isolated worker process.
 
-> Status: milestones 1–4 done (core, PE, ELF + IOCs, YARA + batch mode).
-> Next: the TUI (M5). Pre-release: the JSON schema is version 1 and may
+> Status: milestones 1–5 done (core, PE, ELF + IOCs, YARA + batch mode,
+> TUI). Next: polish (M6). Pre-release: the JSON schema is version 1 and may
 > still change before the first release (see `docs/output-schema.md`).
 
 ## What it looks at
@@ -35,14 +35,18 @@ Findings, their thresholds and false-positive notes:
 ## Building
 
 ```bash
-cargo build --release -p rtriage-cli                  # without YARA (small, fast to build)
-cargo build --release -p rtriage-cli --features yara  # with YARA (yara-x)
+cargo build --release -p rtriage-cli                        # TUI, no YARA (small, fast to build)
+cargo build --release -p rtriage-cli --features yara        # TUI + YARA (yara-x)
+cargo build --release -p rtriage-cli --no-default-features  # neither: plain CLI
 ```
 
-| Build | Binary | Clean release build | Dependencies |
+| Build | Binary | Clean release build | Dependencies of `rtriage-cli` |
 |---|---|---|---|
-| default | ~4 MiB | ~1 min | 43 crates (core) |
-| `--features yara` | ~17 MiB | ~6 min | 277 crates (core) |
+| default (TUI) | ~4.7 MiB | ~1 min | 116 crates |
+| `--no-default-features` | ~4.2 MiB | ~1 min | 73 crates |
+| `--features yara` | ~17 MiB | ~6 min | 262 crates |
+
+(Windows x86_64; crates counted with `cargo tree -e normal`.)
 
 **MSRV:** Rust 1.95 (pinned in `rust-toolchain.toml`). The `test-hooks`
 feature exists only for the worker-isolation tests; never enable it in a
@@ -65,6 +69,8 @@ rtriage scan samples/ --fail-on medium    # exit 3 if any file is medium or wors
 rtriage --rules-dir my-rules/ sample.exe  # your rules layered over the bundled ones
 rtriage --yara extra.yar --yara rules/ x  # extra YARA rules (yara build)
 rtriage --no-yara sample.exe              # skip YARA, even the bundled rules
+
+rtriage tui sample.exe                    # interactive view (see below)
 ```
 
 | Invocation | Where files are analyzed | Output |
@@ -87,6 +93,44 @@ fresh worker continues.
 | `1` | At least one file could not be analyzed, or the output could not be written. |
 | `2` | Usage error: bad flags, invalid rules, YARA rules for a build without YARA. |
 | `3` | `--fail-on` threshold met. Takes precedence over `1` (with a warning). |
+
+## TUI
+
+`rtriage tui <FILE>` analyses one file in the background (Esc or `q`
+cancels; a cancelled report is marked **PARTIAL** and its risk shows as
+`INCOMPLETE`, never `clean-looking`) and opens an interactive view. The
+analysis options (`--rules-dir`, `--yara`, `--timeout`, `--max-size`) apply.
+It needs a terminal on stdin and stdout; in a pipe it exits with code 2.
+
+| Tab | Shows |
+|---|---|
+| `1` Findings | findings list; details and evidence on the right, `Enter` jumps to the evidence |
+| `2` Sections | PE sections, ELF section headers (`s`: program headers) |
+| `3` Imports | PE functions by DLL with imphash, ELF symbols |
+| `4` Strings | every extracted string; `f` filters by class and length, `x` clears |
+| `5` IOCs | file hashes, then indicators; defanged, `d` shows raw values |
+| `6` Explain | how the score was computed; `Enter` opens the finding |
+| `7` Hex | read-only dump; byte-range evidence opens it highlighted, `g` goes to an offset |
+
+`Backspace` (or Alt-←) goes back after a jump. `/` searches the current list,
+`n`/`N` step through matches. `?` lists every key. The view needs at least
+60×16; everything taken from the file is shown with control, bidi and
+invisible characters escaped.
+
+**Copying.** `y` copies the selected value sanitized: one line, escapes
+visible, URLs and IPs defanged. `Y` copies it exactly as found, after asking
+(it may contain control characters). Hashes are copied as they are. Copying
+uses the terminal's clipboard sequence (OSC 52), so it also works over SSH,
+up to 64 KiB, if the terminal allows it. Many modern terminals do (for
+example Windows Terminal, kitty, WezTerm); some need it switched on first
+(iTerm2's clipboard-access setting, xterm's `disallowedWindowOps`). The
+status line says what was sent, not whether the terminal accepted it.
+
+- **tmux:** set `set -g set-clipboard on`. With `external`, which user
+  reports give as the default, tmux ignores the sequence from applications.
+  rtriage sends the plain sequence inside tmux, so `allow-passthrough` is
+  not needed (it only matters for the `\ePtmux;` wrapper).
+- **GNU screen:** the sequence is wrapped for screen automatically.
 
 ## Custom rules
 
@@ -119,7 +163,13 @@ cargo test --workspace                    # default features
 cargo test --workspace --all-features     # with YARA and the worker test hooks
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 PROPTEST_CASES=100000 cargo test -p rtriage-core --release --all-features --test robustness_elf
+PROPTEST_CASES=10000 cargo test -p rtriage-tui --release --test robustness   # random keys, whole TUI
+cargo test -p rtriage-tui --release --test perf -- --ignored                 # strings list timing
+cargo bench -p rtriage-tui --bench strings_list
+cargo insta review                        # after an intended change to a screen
 ```
+
+TUI screens are snapshot-tested at 80×24 and larger with `insta`.
 
 Tests use synthetic, programmatically built fixtures only; no real malware
 is, or will be, part of this repository.

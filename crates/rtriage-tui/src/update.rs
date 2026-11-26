@@ -85,8 +85,12 @@ fn on_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
         return Vec::new();
     }
     match key.code {
-        KeyCode::Char('?') => app.help = !app.help,
-        _ if app.help || app.report().is_none() => {}
+        KeyCode::Char('?') => {
+            app.help = !app.help;
+            app.help_scroll = 0;
+        }
+        code if app.help => help_key(app, code),
+        _ if app.report().is_none() => {}
         KeyCode::Char('/') => open_prompt(app),
         KeyCode::Char('n') => search_step(app, Direction::Next),
         KeyCode::Char('N') => search_step(app, Direction::Previous),
@@ -351,6 +355,22 @@ fn navigate(app: &mut App, code: KeyCode) {
         step(list, rows);
         list.follow(rows);
     }
+}
+
+/// Keys while the help overlay is open: scroll it, nothing else.
+fn help_key(app: &mut App, code: KeyCode) {
+    let max = crate::view::help_max_scroll(app.size);
+    let s = app.help_scroll;
+    app.help_scroll = match code {
+        KeyCode::Up | KeyCode::Char('k') => s.saturating_sub(1),
+        KeyCode::Down | KeyCode::Char('j') => s.saturating_add(1),
+        KeyCode::PageUp => s.saturating_sub(10),
+        KeyCode::PageDown => s.saturating_add(10),
+        KeyCode::Home => 0,
+        KeyCode::End => max,
+        _ => s,
+    }
+    .min(max);
 }
 
 /// Cursor keys of the hex view: rows, bytes, pages, file ends.

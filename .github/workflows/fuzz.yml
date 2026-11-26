@@ -61,3 +61,7 @@ jobs:
           --test robustness_pe --test robustness_elf --test robustness_yara
         env:
           PROPTEST_CASES: "100000"
+      # Random key sequences over every fixture through the whole TUI.
+      - run: cargo test -p rtriage-tui --release --locked --test robustness
+        env:
+          PROPTEST_CASES: "100000"

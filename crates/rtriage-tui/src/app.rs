@@ -176,6 +176,8 @@ pub struct App {
     pub size: (u16, u16),
     /// Help overlay visible.
     pub help: bool,
+    /// First visible line of the help overlay.
+    pub help_scroll: u16,
     /// Ticks seen, for the spinner.
     pub ticks: u64,
     /// List cursors.
@@ -205,6 +207,7 @@ impl App {
             tab: Tab::Findings,
             size,
             help: false,
+            help_scroll: 0,
             ticks: 0,
             panes: Panes::default(),
             history: History::default(),

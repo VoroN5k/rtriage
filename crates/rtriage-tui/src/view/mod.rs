@@ -4,6 +4,7 @@
 mod explain;
 mod findings;
 mod help;
+pub(crate) use help::max_scroll as help_max_scroll;
 mod hex;
 mod imports;
 mod iocs;
@@ -38,7 +39,7 @@ pub fn view(app: &App, frame: &mut Frame<'_>) {
         strings::dialog(d, frame, area);
     }
     if app.help {
-        help::draw(frame, area);
+        help::draw(app, frame, area);
     }
 }
 
