@@ -464,3 +464,20 @@ fn fail_on_rejects_unknown_levels() {
         );
     }
 }
+
+#[cfg(feature = "tui")]
+#[test]
+fn tui_without_a_terminal_exits_2_and_points_to_text_output() {
+    let file = scratch("tui-no-tty.bin", b"plain text, nothing to see");
+    // `output()` pipes stdout/stderr and gives the child a null stdin.
+    let out = Command::new(env!("CARGO_BIN_EXE_rtriage"))
+        .arg("tui")
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("interactive terminal"), "{stderr}");
+    assert!(stderr.contains("-f text"), "{stderr}");
+    assert!(out.stdout.is_empty(), "nothing drawn: {:?}", out.stdout);
+}

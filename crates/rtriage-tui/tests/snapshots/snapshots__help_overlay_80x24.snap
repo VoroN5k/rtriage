@@ -1,0 +1,29 @@
+---
+source: crates/rtriage-tui/tests/snapshots.rs
+assertion_line: 114
+expression: render(&app)
+---
+" rtriage  [LOW (score 17)]  sample.exe · PE · 512 bytes                         "
+" 1 Findings │ 2 Sections │ 3 Imports │ 4 Strings │ 5 IOCs │ 6 Explain           "
+"┌ Findings ────────────────────────────────────────────────────────────────────┐"
+"│3 findings                                                                    │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│        ┌ Keys ──────────────────────────────────────────────────────┐        │"
+"│        │ 1-6              switch tab                                │        │"
+"│        │ Tab / Shift-Tab  next / previous tab                       │        │"
+"│        │ ?                toggle this help                          │        │"
+"│        │ Esc              close help, or cancel a running analysis  │        │"
+"│        │ q / Ctrl-C       quit (cancels a running analysis)         │        │"
+"│        └────────────────────────────────────────────────────────────┘        │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" ? help · Tab/1-6 tabs · q quit                                                 "

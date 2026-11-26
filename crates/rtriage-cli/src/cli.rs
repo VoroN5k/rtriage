@@ -134,6 +134,20 @@ pub enum Command {
     /// Batch triage in isolated worker processes: a table sorted by risk
     /// (JSON: NDJSON ending in one summary line).
     Scan(ScanArgs),
+    /// Interactive view of one file: findings and their evidence, sections,
+    /// imports, strings, IOCs and the score breakdown.
+    #[cfg(feature = "tui")]
+    Tui(TuiArgs),
+}
+
+/// `rtriage tui` arguments (analysis options such as --rules-dir, --yara,
+/// --timeout and --max-size apply; output options are ignored).
+#[cfg(feature = "tui")]
+#[derive(Debug, Args)]
+pub struct TuiArgs {
+    /// File to analyze.
+    #[arg(value_name = "FILE")]
+    pub path: PathBuf,
 }
 
 /// `rtriage scan` arguments (all other options apply too).
@@ -262,6 +276,21 @@ mod tests {
         assert!(Cli::try_parse_from(["rtriage", "--worker", "a.exe"]).is_err());
         let help = Cli::command().render_long_help().to_string();
         assert!(!help.contains("--worker"));
+    }
+
+    #[cfg(feature = "tui")]
+    #[test]
+    fn tui_subcommand_takes_one_file_and_analysis_options() {
+        let cli = Cli::try_parse_from(["rtriage", "tui", "a.exe", "--timeout", "5", "--no-yara"])
+            .unwrap();
+        let Some(Command::Tui(args)) = &cli.command else {
+            panic!("no tui");
+        };
+        assert_eq!(args.path, PathBuf::from("a.exe"));
+        assert_eq!(cli.timeout.get(), 5);
+        assert!(cli.no_yara);
+        assert!(Cli::try_parse_from(["rtriage", "tui"]).is_err());
+        assert!(Cli::try_parse_from(["rtriage", "tui", "a", "b"]).is_err());
     }
 
     #[test]

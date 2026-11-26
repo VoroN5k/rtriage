@@ -1,0 +1,20 @@
+---
+source: crates/rtriage-tui/tests/snapshots.rs
+assertion_line: 123
+expression: screen
+---
+"                                                           "
+"                                                           "
+"                                                           "
+"                                                           "
+"                                                           "
+"                                                           "
+"window too small (need 60×16, have 59×15)                  "
+"enlarge the terminal, or press q to quit                   "
+"                                                           "
+"                                                           "
+"                                                           "
+"                                                           "
+"                                                           "
+"                                                           "
+"                                                           "

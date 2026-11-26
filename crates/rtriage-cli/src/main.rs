@@ -65,6 +65,8 @@ fn main() -> ExitCode {
 fn run(cli: &Cli, config: &Config) -> anyhow::Result<ExitCode> {
     let (paths, scan) = match &cli.command {
         Some(Command::Scan(args)) => (args.paths.as_slice(), Some(args)),
+        #[cfg(feature = "tui")]
+        Some(Command::Tui(args)) => return Ok(tui(&args.path, config)),
         None => (cli.files.as_slice(), None),
     };
     let walk = walk::collect(paths, WalkOptions::default());
@@ -112,6 +114,31 @@ fn run(cli: &Cli, config: &Config) -> anyhow::Result<ExitCode> {
         eprintln!("warning: {w}");
     }
     Ok(ExitCode::from(code))
+}
+
+/// `rtriage tui <FILE>`: 0 after a normal quit, 2 without a terminal, 1 if
+/// the file cannot be loaded or the terminal fails.
+#[cfg(feature = "tui")]
+fn tui(path: &Path, config: &Config) -> ExitCode {
+    let opts = rtriage_tui::TuiOptions {
+        config: config.clone(),
+        registry: Registry::default(),
+    };
+    match rtriage_tui::run(path, opts) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            let code = match err {
+                rtriage_tui::TuiError::NotATty => EXIT_USAGE,
+                _ => EXIT_RUNTIME_ERROR,
+            };
+            eprintln!(
+                "error: {}: {}",
+                sanitize(&path.to_string_lossy()),
+                sanitize(&err.to_string())
+            );
+            ExitCode::from(code)
+        }
+    }
 }
 
 /// What the exit code is computed from.
@@ -410,6 +437,15 @@ fn init_logging(cli: &Cli) {
         (false, 1) => LevelFilter::INFO,
         (false, 2) => LevelFilter::DEBUG,
         (false, _) => LevelFilter::TRACE,
+    };
+    // Log lines would be drawn over the TUI; with stderr redirected they are fine.
+    #[cfg(feature = "tui")]
+    let level = if matches!(cli.command, Some(Command::Tui(_)))
+        && io::IsTerminal::is_terminal(&io::stderr())
+    {
+        LevelFilter::OFF
+    } else {
+        level
     };
     tracing_subscriber::fmt()
         .with_writer(io::stderr)

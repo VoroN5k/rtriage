@@ -1,0 +1,21 @@
+[package]
+name = "rtriage-tui"
+description = "Interactive terminal view of an rtriage report"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
+rtriage-core = { path = "../rtriage-core" }
+rtriage-sanitize = { path = "../rtriage-sanitize" }
+thiserror = "2.0.21"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+insta = "1.49.0"
+rtriage-fixtures = { path = "../rtriage-fixtures" }

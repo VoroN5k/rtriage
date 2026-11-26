@@ -1,0 +1,29 @@
+---
+source: crates/rtriage-tui/tests/snapshots.rs
+assertion_line: 48
+expression: render(&app)
+---
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"        ┌ rtriage ─────────────────────────────────────────────────────┐        "
+"        │| Analyzing                                                   │        "
+"        │                                                              │        "
+"        │sample.exe                                                    │        "
+"        │PE · 512 bytes                                                │        "
+"        │                                                              │        "
+"        │Esc cancel · q quit                                           │        "
+"        └──────────────────────────────────────────────────────────────┘        "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
