@@ -115,7 +115,7 @@ In-process defences cannot stop everything: a stack overflow or an
 allocation failure aborts the whole process, and a hung third-party call
 cannot be interrupted. So directories and multi-file runs analyse each file
 in a **worker process**; a single file runs in-process (cooperative deadline
-and limits apply there).
+and limits apply there). See `output-schema.md`, "Which mode runs".
 
 **Worker mode** (`rtriage --worker`, hidden; `crates/rtriage-cli/src/worker.rs`).
 Protocol version 1, one JSON object per line:
@@ -148,8 +148,28 @@ Protocol version 1, one JSON object per line:
   `RTRIAGE_TEST_WORKER=crash:<name>|hang:<name>|spam:<name>` for
   deterministic crashes, hangs and endless output.
 
-Planned in the next steps: the parent's pool (`--jobs`), per-file wall-clock
-kill (`--timeout` plus a grace period), `crashed` / `timed_out` failures with
-worker restart, and serialized YARA rules sent once to each worker. Platform
-memory caps (Job Objects, `setrlimit`) remain a possible follow-up outside
-the core crate.
+**Pool** (`crates/rtriage-cli/src/pool.rs`, `modes.rs`).
+
+- Up to `--jobs` workers (default: CPU count, at most 64), one file in flight
+  each. All reader threads feed one channel, so the parent waits once, until
+  the next event or the nearest deadline.
+- A file gets `--timeout` + 5 s of wall-clock time; then its worker is
+  killed and the file is `timed_out`. A worker that dies mid-file makes it
+  `crashed`; an oversized or malformed answer makes it `invalid_response`.
+  Only that file is lost: a fresh worker takes the rest. Files are never
+  retried (the same file would crash the next worker too).
+- Workers that die before `ready` three times in a row stop the run with an
+  error instead of respawning forever; a worker must be ready within 30 s.
+- Events from a killed worker are ignored (each respawn bumps the slot's
+  generation), and dropping a worker always kills and reaps it.
+- Full-report mode releases bodies in input order through a reorder buffer
+  that holds only bodies finished ahead of a slower earlier file; `scan`
+  keeps only compact rows and streams full reports (`--full`).
+- Tests (`crates/rtriage-cli/tests/pool.rs`): pooled reports equal
+  in-process reports byte for byte; crash, hang (killed after timeout +
+  grace), endless output and start failures via `test-hooks`; Windows and
+  Linux.
+
+Platform memory caps (Job Objects, `setrlimit`) remain a possible follow-up
+outside the core crate. Serialized YARA rules for workers come with YARA
+(M4 steps 5 and 6).

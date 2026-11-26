@@ -65,4 +65,4 @@ Strings  35 found (ASCII + UTF-16LE, min 5), 2 classified
 ------------------------------------------------------------------------
 
 Failed
-  missing.bin: cannot read missing.bin: not found
+  missing.bin: cannot read missing.bin: not found (io)

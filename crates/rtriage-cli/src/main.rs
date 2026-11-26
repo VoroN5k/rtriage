@@ -2,7 +2,9 @@
 #![forbid(unsafe_code)]
 
 mod cli;
+mod modes;
 mod output;
+mod pool;
 mod sanitize;
 mod worker;
 
@@ -19,9 +21,9 @@ use rtriage_core::walk::{self, WalkOptions};
 use rtriage_core::{Config, Registry, RiskLevel};
 use tracing::level_filters::LevelFilter;
 
-use crate::cli::{Cli, OutputFormat};
+use crate::cli::{Cli, Command, OutputFormat};
 use crate::output::text::TextOptions;
-use crate::output::{Failure, Run, SkippedPath};
+use crate::output::{Failure, FailureKind, Run, SkippedPath};
 use crate::sanitize::sanitize;
 
 /// At least one file could not be analyzed, or output could not be written.
@@ -56,25 +58,22 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: &Cli, config: &Config) -> anyhow::Result<ExitCode> {
-    let registry = Registry::default();
-    let mut result = Run {
-        reports: Vec::new(),
-        failures: Vec::new(),
-        skipped: Vec::new(),
+    let (paths, scan) = match &cli.command {
+        Some(Command::Scan(args)) => (args.paths.as_slice(), Some(args)),
+        None => (cli.files.as_slice(), None),
     };
-
-    let walk = walk::collect(&cli.files, WalkOptions::default());
-    for e in &walk.errors {
-        let failure = Failure {
+    let walk = walk::collect(paths, WalkOptions::default());
+    let mut failures: Vec<Failure> = walk
+        .errors
+        .iter()
+        .map(|e| Failure {
             path: e.path.to_string_lossy().into_owned(),
+            kind: FailureKind::Io,
             error: format!("cannot read directory: {}", e.error),
-        };
-        eprintln!(
-            "error: {}: {}",
-            sanitize(&failure.path),
-            sanitize(&failure.error)
-        );
-        result.failures.push(failure);
+        })
+        .collect();
+    for f in &failures {
+        report_failure(f);
     }
     if walk.limit_reached() {
         eprintln!(
@@ -85,7 +84,7 @@ fn run(cli: &Cli, config: &Config) -> anyhow::Result<ExitCode> {
     if walk.walked_directories && walk.files.is_empty() && walk.errors.is_empty() {
         eprintln!("warning: no files found");
     }
-    result.skipped = walk
+    let skipped: Vec<SkippedPath> = walk
         .skipped
         .iter()
         .map(|s| SkippedPath {
@@ -94,66 +93,113 @@ fn run(cli: &Cli, config: &Config) -> anyhow::Result<ExitCode> {
         })
         .collect();
 
-    for path in &walk.files {
-        match triage(path, &registry, config) {
-            Ok(mut report) => {
-                output::prepare(&mut report, cli.all_strings, cli.min_severity.into());
-                result.reports.push(report);
-            }
-            Err(failure) => {
-                // Errors are printed even with --quiet.
-                eprintln!(
-                    "error: {}: {}",
-                    sanitize(&failure.path),
-                    sanitize(&failure.error)
-                );
-                result.failures.push(failure);
-            }
-        }
-    }
-
-    write_output(cli, &result)?;
+    let gate = if let Some(scan) = scan {
+        modes::scan(cli, scan, &walk.files, &mut failures, &skipped)?
+    } else if let ([single], false) = (walk.files.as_slice(), walk.walked_directories) {
+        in_process(cli, config, single, &mut failures, skipped)?
+    } else {
+        modes::full_reports(cli, &walk.files, &mut failures, &skipped)?
+    };
 
     let fail_on = cli.fail_on.map(RiskLevel::from);
-    let code = exit_code(&result, fail_on);
-    for w in exit_warnings(&result, code) {
+    let code = exit_code(&gate.levels, &failures, fail_on);
+    for w in exit_warnings(&failures, gate.partial, code) {
         eprintln!("warning: {w}");
     }
     Ok(ExitCode::from(code))
 }
 
+/// What the exit code is computed from.
+#[derive(Debug, Default)]
+pub(crate) struct Gate {
+    /// Risk level of every analyzed file.
+    pub levels: Vec<RiskLevel>,
+    /// Reports that timed out and are partial.
+    pub partial: usize,
+}
+
+/// Prints a failure as it happens (even with `--quiet`).
+pub(crate) fn report_failure(f: &Failure) {
+    eprintln!("error: {}: {}", sanitize(&f.path), sanitize(&f.error));
+}
+
+/// A single file, analyzed in this process.
+fn in_process(
+    cli: &Cli,
+    config: &Config,
+    path: &Path,
+    failures: &mut Vec<Failure>,
+    skipped: Vec<SkippedPath>,
+) -> anyhow::Result<Gate> {
+    let registry = Registry::default();
+    let mut result = Run {
+        reports: Vec::new(),
+        failures: std::mem::take(failures),
+        skipped,
+    };
+    match triage(path, &registry, config) {
+        Ok(mut report) => {
+            output::prepare(&mut report, cli.all_strings, cli.min_severity.into());
+            result.reports.push(report);
+        }
+        Err(failure) => {
+            report_failure(&failure);
+            result.failures.push(failure);
+        }
+    }
+    write_output(cli, &result)?;
+    let gate = Gate {
+        levels: result.reports.iter().map(|r| r.risk.level).collect(),
+        partial: result
+            .reports
+            .iter()
+            .filter(|r| worker::Summary::of(r).partial)
+            .count(),
+    };
+    *failures = result.failures;
+    Ok(gate)
+}
+
 /// Exit code for a finished run: [`EXIT_RISK`] if `--fail-on` is met, else
 /// [`EXIT_RUNTIME_ERROR`] if any file failed, else 0 (priority 3 > 1 > 0).
-fn exit_code(run: &Run, fail_on: Option<RiskLevel>) -> u8 {
-    let risky = fail_on.is_some_and(|level| run.reports.iter().any(|r| r.risk.level >= level));
+fn exit_code(levels: &[RiskLevel], failures: &[Failure], fail_on: Option<RiskLevel>) -> u8 {
+    let risky = fail_on.is_some_and(|gate| levels.iter().any(|l| *l >= gate));
     if risky {
         EXIT_RISK
-    } else if !run.failures.is_empty() {
+    } else if !failures.is_empty() {
         EXIT_RUNTIME_ERROR
     } else {
         0
     }
 }
 
-/// Things a gate (`--fail-on`, exit codes) can hide: failed files masked by
-/// code 3, and partial reports whose risk may be underestimated.
-fn exit_warnings(run: &Run, code: u8) -> Vec<String> {
+/// Things exit codes can hide: failures masked by code 3, files the
+/// isolation layer had to stop, and partial reports.
+fn exit_warnings(failures: &[Failure], partial: usize, code: u8) -> Vec<String> {
     let mut out = Vec::new();
-    if code == EXIT_RISK && !run.failures.is_empty() {
+    if code == EXIT_RISK && !failures.is_empty() {
         out.push(format!(
             "{} file(s) could not be analyzed; exit code 3 (--fail-on) takes precedence over 1",
-            run.failures.len()
+            failures.len()
         ));
     }
-    let partial = run
-        .reports
-        .iter()
-        .filter(|r| {
-            r.errors
-                .iter()
-                .any(|e| matches!(e.error, rtriage_core::AnalysisError::Timeout { .. }))
-        })
-        .count();
+    let isolated: Vec<String> = [
+        FailureKind::Crashed,
+        FailureKind::TimedOut,
+        FailureKind::InvalidResponse,
+    ]
+    .iter()
+    .filter_map(|k| {
+        let n = failures.iter().filter(|f| f.kind == *k).count();
+        (n > 0).then(|| format!("{n} {}", output::kind_name(*k)))
+    })
+    .collect();
+    if !isolated.is_empty() {
+        out.push(format!(
+            "worker isolation stopped files: {} (see failures)",
+            isolated.join(", ")
+        ));
+    }
     if partial > 0 {
         out.push(format!(
             "{partial} report(s) timed out and are partial; their risk may be underestimated"
@@ -161,7 +207,6 @@ fn exit_warnings(run: &Run, code: u8) -> Vec<String> {
     }
     out
 }
-
 fn build_config(cli: &Cli) -> anyhow::Result<Config> {
     let mut config = Config {
         strings_min_len: cli.strings_min,
@@ -204,11 +249,13 @@ fn triage(
     if path.is_dir() {
         return Err(Failure {
             path: shown,
+            kind: FailureKind::Io,
             error: "is a directory".into(),
         });
     }
     let input = rtriage_core::load(path, &config.limits).map_err(|e| Failure {
         path: shown,
+        kind: FailureKind::from(&e),
         error: e.to_string(),
     })?;
     Ok(registry.analyze(&input, config))
@@ -298,67 +345,65 @@ fn init_logging(cli: &Cli) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rtriage_core::{Deadline, Input};
 
-    fn report(level: RiskLevel) -> rtriage_core::Report {
-        let mut r =
-            Registry::default().analyze(&Input::from_bytes("t", b"x".to_vec()), &Config::default());
-        r.risk.level = level;
-        r
-    }
-
-    fn run(levels: &[RiskLevel], failures: usize) -> Run {
-        Run {
-            reports: levels.iter().map(|l| report(*l)).collect(),
-            failures: (0..failures)
-                .map(|i| Failure {
-                    path: format!("f{i}"),
-                    error: "gone".into(),
-                })
-                .collect(),
-            skipped: Vec::new(),
-        }
+    fn failures(kinds: &[FailureKind]) -> Vec<Failure> {
+        kinds
+            .iter()
+            .enumerate()
+            .map(|(i, k)| Failure {
+                path: format!("f{i}"),
+                kind: *k,
+                error: "gone".into(),
+            })
+            .collect()
     }
 
     #[test]
     fn priority_is_risk_then_failure_then_success() {
         use RiskLevel::*;
-        assert_eq!(exit_code(&run(&[Low], 0), None), 0);
-        assert_eq!(exit_code(&run(&[High], 1), None), EXIT_RUNTIME_ERROR);
-        assert_eq!(exit_code(&run(&[Medium], 0), Some(Medium)), EXIT_RISK);
-        assert_eq!(exit_code(&run(&[Medium], 0), Some(High)), 0);
+        let none = failures(&[]);
+        let two = failures(&[FailureKind::Io, FailureKind::Crashed]);
+        assert_eq!(exit_code(&[Low], &none, None), 0);
+        assert_eq!(exit_code(&[High], &two, None), EXIT_RUNTIME_ERROR);
+        assert_eq!(exit_code(&[Medium], &none, Some(Medium)), EXIT_RISK);
+        assert_eq!(exit_code(&[Medium], &none, Some(High)), 0);
         assert_eq!(
-            exit_code(&run(&[CleanLooking, High], 0), Some(Low)),
+            exit_code(&[CleanLooking, High], &none, Some(Low)),
             EXIT_RISK
         );
         // 3 beats 1.
-        assert_eq!(exit_code(&run(&[High], 2), Some(Medium)), EXIT_RISK);
-        assert_eq!(exit_code(&run(&[Low], 2), Some(Medium)), EXIT_RUNTIME_ERROR);
+        assert_eq!(exit_code(&[High], &two, Some(Medium)), EXIT_RISK);
+        assert_eq!(exit_code(&[Low], &two, Some(Medium)), EXIT_RUNTIME_ERROR);
         // No reports at all: a gate cannot be met.
-        assert_eq!(exit_code(&run(&[], 0), Some(Low)), 0);
+        assert_eq!(exit_code(&[], &none, Some(Low)), 0);
     }
 
     #[test]
-    fn masked_failures_and_partial_reports_are_warned_about() {
-        let masked = run(&[RiskLevel::High], 1);
-        let w = exit_warnings(&masked, EXIT_RISK);
+    fn masked_isolated_and_partial_are_warned_about() {
+        let f = failures(&[FailureKind::Io]);
+        let w = exit_warnings(&f, 0, EXIT_RISK);
         assert!(
             w.iter().any(|w| w.contains("could not be analyzed")),
             "{w:?}"
         );
-        assert!(exit_warnings(&masked, EXIT_RUNTIME_ERROR).is_empty());
+        assert!(exit_warnings(&f, 0, EXIT_RUNTIME_ERROR).is_empty());
 
-        let partial = Registry::default().analyze_with_deadline(
-            &Input::from_bytes("t", b"x".to_vec()),
-            &Config::default(),
-            Deadline::expired(),
+        let f = failures(&[
+            FailureKind::Crashed,
+            FailureKind::Crashed,
+            FailureKind::TimedOut,
+            FailureKind::InvalidResponse,
+            FailureKind::TooLarge,
+        ]);
+        let w = exit_warnings(&f, 0, EXIT_RUNTIME_ERROR);
+        assert_eq!(
+            w,
+            ["worker isolation stopped files: 2 crashed, 1 timed_out, 1 invalid_response (see failures)"]
         );
-        let r = Run {
-            reports: vec![partial],
-            failures: Vec::new(),
-            skipped: Vec::new(),
-        };
-        let w = exit_warnings(&r, 0);
-        assert!(w.iter().any(|w| w.contains("partial")), "{w:?}");
+        let w = exit_warnings(&[], 3, 0);
+        assert!(
+            w.iter().any(|w| w.contains("3 report(s) timed out")),
+            "{w:?}"
+        );
     }
 }

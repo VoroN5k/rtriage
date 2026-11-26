@@ -3,78 +3,95 @@
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
 
-use clap::{ArgAction, Parser, ValueEnum};
+use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 
 /// Fast static malware triage for PE and ELF binaries.
 ///
 /// Never executes, loads or emulates the files it analyzes.
 #[derive(Debug, Parser)]
-#[command(name = "rtriage", version, about, long_about = None)]
+#[command(
+    name = "rtriage",
+    version,
+    about,
+    long_about = None,
+    subcommand_negates_reqs = true
+)]
 pub struct Cli {
+    /// Batch mode (`scan`); without a subcommand, full reports are printed.
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
     /// Files or directories to triage (directories are walked recursively).
+    /// One file is analyzed in-process; several files or any directory go
+    /// through isolated worker processes. A file named `scan` needs `./scan`.
     #[arg(required_unless_present = "worker", value_name = "FILE")]
     pub files: Vec<PathBuf>,
 
+    /// Worker processes for directories and multi-file runs
+    /// [default: CPU count, at most 64].
+    #[arg(short, long, value_name = "N", global = true, value_parser = clap::value_parser!(u64).range(1..=64))]
+    pub jobs: Option<u64>,
+
     /// Output format.
-    #[arg(short = 'f', long, value_enum, default_value_t = OutputFormat::Text)]
+    #[arg(short = 'f', long, value_enum, default_value_t = OutputFormat::Text, global = true)]
     pub format: OutputFormat,
 
     /// Write the report to PATH instead of stdout.
-    #[arg(short, long, value_name = "PATH")]
+    #[arg(short, long, value_name = "PATH", global = true)]
     pub output: Option<PathBuf>,
 
     /// Minimum string length, in characters.
-    #[arg(long, value_name = "N", default_value = "5")]
+    #[arg(long, value_name = "N", default_value = "5", global = true)]
     pub strings_min: NonZeroUsize,
 
     /// Include every extracted string, not only classified ones (URLs, IPs, paths, ...).
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub all_strings: bool,
 
     /// Maximum file size to analyze, in bytes [default: 536870912 (512 MiB)].
-    #[arg(long, value_name = "BYTES")]
+    #[arg(long, value_name = "BYTES", global = true)]
     pub max_size: Option<u64>,
 
     /// Show how the risk score was computed (every finding, cap and suppression).
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub explain: bool,
 
     /// Defang URLs, domains, IPs and emails in text output (hxxp://, 1[.]2[.]3[.]4).
     /// JSON always has both the raw value and `value_defanged`.
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub defang: bool,
 
     /// Exit with code 3 if any file's risk is at or above this level (for CI
     /// gates). Takes precedence over exit code 1 for failed files.
-    #[arg(long, value_enum, value_name = "LEVEL")]
+    #[arg(long, value_enum, value_name = "LEVEL", global = true)]
     pub fail_on: Option<FailOn>,
 
     /// Only show findings at or above this severity (the score always uses all).
-    #[arg(long, value_enum, value_name = "LEVEL", default_value_t = MinSeverity::Info)]
+    #[arg(long, value_enum, value_name = "LEVEL", default_value_t = MinSeverity::Info, global = true)]
     pub min_severity: MinSeverity,
 
     /// Directory with your own rules, layered over the bundled ones. Known files:
     /// api_groups.toml, elf_api_groups.toml, packers.toml (replace the bundled
     /// ones unless they set include_defaults = true) and ioc_allowlist.toml
     /// (always added). Missing files fall back to the bundled rules.
-    #[arg(long, value_name = "DIR")]
+    #[arg(long, value_name = "DIR", global = true)]
     pub rules_dir: Option<PathBuf>,
 
     /// Hard time limit per file, in seconds (must be > 0). When it expires the
     /// remaining analyzers are skipped and the report is marked partial.
-    #[arg(long, value_name = "SECONDS", default_value = "30")]
+    #[arg(long, value_name = "SECONDS", default_value = "30", global = true)]
     pub timeout: NonZeroU64,
 
     /// Disable colored output (NO_COLOR is honored too).
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub no_color: bool,
 
     /// More diagnostics on stderr (-v info, -vv debug, -vvv trace).
-    #[arg(short, long, action = ArgAction::Count, conflicts_with = "quiet")]
+    #[arg(short, long, action = ArgAction::Count, conflicts_with = "quiet", global = true)]
     pub verbose: u8,
 
     /// Only print errors on stderr.
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     pub quiet: bool,
 
     /// Internal: run as a worker process speaking the line protocol on
@@ -86,6 +103,35 @@ pub struct Cli {
     /// outside `--worker`).
     #[arg(long, hide = true)]
     pub worker_color: bool,
+
+    /// Internal: a worker renders JSON bodies on one line (for NDJSON).
+    #[arg(long, hide = true)]
+    pub worker_compact: bool,
+
+    /// Internal: a worker sends summaries only, no rendered body.
+    #[arg(long, hide = true)]
+    pub worker_summary_only: bool,
+}
+
+/// Subcommands.
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Batch triage in isolated worker processes: a table sorted by risk
+    /// (JSON: NDJSON ending in one summary line).
+    Scan(ScanArgs),
+}
+
+/// `rtriage scan` arguments (all other options apply too).
+#[derive(Debug, Args)]
+pub struct ScanArgs {
+    /// Files or directories to scan.
+    #[arg(required = true, value_name = "PATH")]
+    pub paths: Vec<PathBuf>,
+
+    /// Also emit every full report: text before the table, JSON as one
+    /// NDJSON `report` line each (completion order).
+    #[arg(long)]
+    pub full: bool,
 }
 
 /// Report output format.
@@ -201,6 +247,42 @@ mod tests {
         assert!(Cli::try_parse_from(["rtriage", "--worker", "a.exe"]).is_err());
         let help = Cli::command().render_long_help().to_string();
         assert!(!help.contains("--worker"));
+    }
+
+    #[test]
+    fn scan_subcommand_and_global_options() {
+        let cli =
+            Cli::try_parse_from(["rtriage", "scan", "dir", "--full", "-f", "json", "-j", "4"])
+                .unwrap();
+        let Some(Command::Scan(args)) = &cli.command else {
+            panic!("no scan");
+        };
+        assert_eq!(args.paths, [PathBuf::from("dir")]);
+        assert!(args.full);
+        assert_eq!((cli.format, cli.jobs), (OutputFormat::Json, Some(4)));
+        // Options before the subcommand work too.
+        let cli = Cli::try_parse_from(["rtriage", "--explain", "scan", "d"]).unwrap();
+        assert!(cli.explain && cli.command.is_some());
+        assert!(Cli::try_parse_from(["rtriage", "scan"]).is_err());
+        // Plain mode is unchanged; `./scan` is a file.
+        let cli = Cli::try_parse_from(["rtriage", "./scan", "b"]).unwrap();
+        assert!(cli.command.is_none() && cli.files.len() == 2);
+    }
+
+    #[test]
+    fn jobs_are_bounded() {
+        for bad in ["0", "65", "-1"] {
+            assert!(
+                Cli::try_parse_from(["rtriage", "-j", bad, "a"]).is_err(),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            Cli::try_parse_from(["rtriage", "-j", "64", "a"])
+                .unwrap()
+                .jobs,
+            Some(64)
+        );
     }
 
     #[test]

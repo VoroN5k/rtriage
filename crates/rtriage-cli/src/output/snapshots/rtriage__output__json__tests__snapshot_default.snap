@@ -6,6 +6,7 @@ expression: "serde_json::to_string_pretty(&v).unwrap()"
   "failures": [
     {
       "error": "cannot read missing.bin: not found",
+      "kind": "io",
       "path": "missing.bin"
     }
   ],

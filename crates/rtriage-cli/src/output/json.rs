@@ -4,7 +4,9 @@
 
 use std::io::{self, Write};
 
-use rtriage_core::Report;
+use rtriage_core::{Report, RiskLevel};
+
+use crate::worker::Summary;
 use serde::Serialize;
 
 use super::{Failure, Run, SkippedPath};
@@ -43,6 +45,147 @@ pub fn render(run: &Run, out: &mut dyn Write) -> io::Result<()> {
     writeln!(out)
 }
 
+// ---------------------------------------------------------------- streaming
+
+/// Starts a document whose reports arrive one by one (worker bodies): the
+/// same keys and order as [`render`], so consumers cannot tell the difference.
+pub fn begin_document(out: &mut dyn Write) -> io::Result<()> {
+    write!(
+        out,
+        "{{\n  \"schema_version\": {SCHEMA_VERSION},\n  \"tool\": {},\n  \"reports\": [",
+        indent(&serde_json::to_string_pretty(&tool())?, 2)
+    )
+}
+
+/// Appends one pretty-printed report body (from a worker).
+pub fn document_report(out: &mut dyn Write, body: &str, first: bool) -> io::Result<()> {
+    if !first {
+        out.write_all(b",")?;
+    }
+    write!(out, "\n    {}", indent(body.trim_end(), 4))
+}
+
+/// Closes the document with the failures and skipped paths.
+pub fn end_document(
+    out: &mut dyn Write,
+    failures: &[Failure],
+    skipped: &[SkippedPath],
+) -> io::Result<()> {
+    write!(
+        out,
+        "\n  ],\n  \"failures\": {},\n  \"skipped\": {}\n}}\n",
+        indent(&serde_json::to_string_pretty(failures)?, 2),
+        indent(&serde_json::to_string_pretty(skipped)?, 2)
+    )
+}
+
+fn tool() -> Tool {
+    Tool {
+        name: "rtriage",
+        version: env!("CARGO_PKG_VERSION"),
+    }
+}
+
+/// Indents every line after the first by `by` spaces.
+fn indent(json: &str, by: usize) -> String {
+    json.replace('\n', &format!("\n{}", " ".repeat(by)))
+}
+
+// ---------------------------------------------------------------- NDJSON (scan)
+
+/// `{"type":"report","schema_version":1,"report":{...}}` with a one-line body.
+pub fn ndjson_report(out: &mut dyn Write, compact_body: &str) -> io::Result<()> {
+    writeln!(
+        out,
+        "{{\"type\":\"report\",\"schema_version\":{SCHEMA_VERSION},\"report\":{}}}",
+        compact_body.trim_end()
+    )
+}
+
+#[derive(Serialize)]
+struct FailureLine<'a> {
+    #[serde(rename = "type")]
+    line: &'static str,
+    #[serde(flatten)]
+    failure: &'a Failure,
+}
+
+/// `{"type":"failure","path":...,"kind":...,"error":...}`.
+pub fn ndjson_failure(out: &mut dyn Write, failure: &Failure) -> io::Result<()> {
+    serde_json::to_writer(
+        &mut *out,
+        &FailureLine {
+            line: "failure",
+            failure,
+        },
+    )?;
+    writeln!(out)
+}
+
+/// Files per risk level.
+#[derive(Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Counts {
+    /// `high`.
+    pub high: u64,
+    /// `medium`.
+    pub medium: u64,
+    /// `low`.
+    pub low: u64,
+    /// `clean_looking`.
+    pub clean_looking: u64,
+}
+
+impl Counts {
+    /// Counts `rows` by level.
+    pub fn of(rows: &[Summary]) -> Self {
+        let mut c = Counts::default();
+        for r in rows {
+            let slot = match r.level {
+                RiskLevel::High => &mut c.high,
+                RiskLevel::Medium => &mut c.medium,
+                RiskLevel::Low => &mut c.low,
+                RiskLevel::CleanLooking => &mut c.clean_looking,
+            };
+            *slot += 1;
+        }
+        c
+    }
+}
+
+#[derive(Serialize)]
+struct SummaryLine<'a> {
+    #[serde(rename = "type")]
+    line: &'static str,
+    schema_version: u32,
+    tool: Tool,
+    rows: &'a [Summary],
+    counts: Counts,
+    failures: &'a [Failure],
+    skipped: &'a [SkippedPath],
+}
+
+/// The final scan line: sorted rows, counts, failures and skipped paths.
+pub fn ndjson_summary(
+    out: &mut dyn Write,
+    rows: &[Summary],
+    failures: &[Failure],
+    skipped: &[SkippedPath],
+) -> io::Result<()> {
+    serde_json::to_writer(
+        &mut *out,
+        &SummaryLine {
+            line: "summary",
+            schema_version: SCHEMA_VERSION,
+            tool: tool(),
+            rows,
+            counts: Counts::of(rows),
+            failures,
+            skipped,
+        },
+    )?;
+    writeln!(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,6 +202,7 @@ mod tests {
         Run {
             reports: vec![report],
             failures: vec![Failure {
+                kind: crate::output::FailureKind::Io,
                 path: "missing.bin".into(),
                 error: "cannot read missing.bin: not found".into(),
             }],

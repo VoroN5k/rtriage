@@ -42,7 +42,34 @@ Pre-release shape changes within version 1:
 | Field | Type | Description |
 |---|---|---|
 | `path` | string | Path as given on the command line (lossy UTF-8). |
-| `error` | string | Human-readable reason (unreadable, directory, over size limit, ...). |
+| `kind` | enum | `io` (missing, unreadable, not a regular file, unreadable directory), `too_large` (over `--max-size`), `timed_out` (worker killed after `--timeout` + 5 s), `crashed` (worker died on this file), `invalid_response` (worker sent an oversized or malformed answer and was killed). The last three come from worker isolation and are also warned about on stderr. |
+| `error` | string | Human-readable reason. |
+
+## Which mode runs
+
+| Invocation | Analysis | Output |
+|---|---|---|
+| `rtriage FILE` (exactly one file) | in this process | the document above |
+| `rtriage DIR`, `rtriage A B ...` | isolated worker processes (`--jobs`) | the same document; reports in input order (directories depth-first, sorted by name), byte-for-byte the reports in-process analysis gives |
+| `rtriage scan PATH...` | isolated worker processes | text: a table sorted by risk; JSON: NDJSON (below) |
+
+## `rtriage scan -f json` (NDJSON)
+
+One JSON object per line. Lines in completion order, then exactly one
+`summary` line at the end; without `--full` the summary is the only line.
+
+| `type` | When | Fields |
+|---|---|---|
+| `report` | `--full`, as each file finishes | `schema_version`, `report` (a [Report](#report)) |
+| `failure` | as each file fails | the [Failure](#failure) fields |
+| `summary` | last line | `schema_version`, `tool`, `rows`, `counts`, `failures`, `skipped` |
+
+`rows` (sorted by `score` descending, then `path` ascending): `path`,
+`format`, `size`, `score`, `level`, `top_finding` (`{ id, title, severity }`
+of the highest-ranked finding that scored, else the first finding, else
+`null`), `packed` (bool), `partial` (bool: an analyzer timed out), `errors`
+(analyzer error count). `counts`: `{ high, medium, low, clean_looking }`.
+Only rows are kept in memory during a scan; full reports are streamed.
 
 ## Report
 

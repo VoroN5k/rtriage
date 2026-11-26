@@ -19,22 +19,20 @@
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitCode, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::mpsc;
 use std::thread::JoinHandle;
-use std::time::Duration;
 
 use rtriage_core::{Config, Format, Registry, Report, RiskLevel, Severity};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{Cli, OutputFormat};
-use crate::output::{self, text::TextOptions};
+use crate::output::{self, text::TextOptions, FailureKind};
 
 /// Worker protocol version, checked by the parent on `ready`.
 pub const PROTOCOL: u32 = 1;
 /// Longest request line a worker accepts (paths only).
 pub const MAX_REQUEST_LINE: usize = 1 << 20;
 /// Default longest response line the parent accepts (one rendered report).
-#[allow(dead_code)] // used by the worker pool (M4 step 4); unit-tested here
 pub const DEFAULT_MAX_RESPONSE_LINE: usize = 64 << 20;
 /// Exit code of a worker that received a malformed request.
 pub const EXIT_PROTOCOL: u8 = 2;
@@ -55,7 +53,6 @@ pub enum WirePath {
 
 impl WirePath {
     /// Encodes `path`, losslessly.
-    #[allow(dead_code)] // used by the worker pool (M4 step 4); unit-tested here
     pub fn from_path(path: &Path) -> Self {
         if let Some(s) = path.to_str() {
             return WirePath::Utf8(s.to_owned());
@@ -200,6 +197,8 @@ pub enum Response {
     Failure {
         /// Request ID.
         id: u64,
+        /// Failure kind (`io` / `too_large` from a worker).
+        kind: FailureKind,
         /// Human-readable reason.
         error: String,
     },
@@ -247,6 +246,8 @@ pub fn read_line_bounded(reader: &mut impl BufRead, limit: usize) -> io::Result<
 /// Runs the worker loop on stdin/stdout. Never returns an error: protocol
 /// violations end the process with [`EXIT_PROTOCOL`].
 pub fn run_worker(cli: &Cli, config: &Config) -> ExitCode {
+    #[cfg(feature = "test-hooks")]
+    test_hooks::at_start();
     let registry = Registry::default();
     let stdin = io::stdin();
     let mut input = stdin.lock();
@@ -288,6 +289,7 @@ fn handle(cli: &Cli, config: &Config, registry: &Registry, req: Request) -> Resp
     let Some(path) = req.path.into_path() else {
         return Response::Failure {
             id: req.id,
+            kind: FailureKind::Io,
             error: "path encoding is not supported on this platform".into(),
         };
     };
@@ -305,13 +307,18 @@ fn handle(cli: &Cli, config: &Config, registry: &Registry, req: Request) -> Resp
         }
         Err(f) => Response::Failure {
             id: req.id,
+            kind: f.kind,
             error: f.error,
         },
     }
 }
 
-/// The report rendered as the run's output format.
+/// The report rendered as the run's output format (empty with
+/// `--worker-summary-only`).
 fn render_body(cli: &Cli, report: &Report) -> String {
+    if cli.worker_summary_only {
+        return String::new();
+    }
     match cli.format {
         OutputFormat::Text => output::text::render_report_string(
             report,
@@ -322,6 +329,9 @@ fn render_body(cli: &Cli, report: &Report) -> String {
                 defang: cli.defang,
             },
         ),
+        OutputFormat::Json if cli.worker_compact => {
+            serde_json::to_string(report).unwrap_or_default()
+        }
         OutputFormat::Json => serde_json::to_string_pretty(report).unwrap_or_default(),
     }
 }
@@ -337,6 +347,13 @@ mod test_hooks {
 
     /// Environment variable read by the hooks (forwarded by the parent).
     pub const VAR: &str = "RTRIAGE_TEST_WORKER";
+
+    /// `startfail:1`: die before `ready` (the parent must give up).
+    pub fn at_start() {
+        if std::env::var(VAR).is_ok_and(|s| s.split(',').any(|r| r == "startfail:1")) {
+            std::process::exit(9);
+        }
+    }
 
     pub fn before(path: &Path) {
         let Ok(spec) = std::env::var(VAR) else {
@@ -372,7 +389,6 @@ mod test_hooks {
 
 /// What the parent hears from a worker.
 #[derive(Debug)]
-#[allow(dead_code)] // used by the worker pool (M4 step 4); unit-tested here
 pub enum Event {
     /// A well-formed message.
     Message(Response),
@@ -384,36 +400,52 @@ pub enum Event {
     Closed,
 }
 
+/// Identifies the worker an event came from: pool slot and that slot's
+/// generation (bumped on every respawn, so stale events are ignored).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Tag {
+    /// Pool slot.
+    pub slot: usize,
+    /// Respawn generation of the slot.
+    pub generation: u64,
+}
+
+/// How to start workers.
+#[derive(Debug, Clone)]
+pub struct Spawn {
+    /// The rtriage executable.
+    pub exe: PathBuf,
+    /// Arguments, including `--worker`.
+    pub args: Vec<std::ffi::OsString>,
+    /// The only environment variables the worker gets.
+    pub env: Vec<(String, String)>,
+    /// Longest accepted response line.
+    pub max_line: usize,
+    /// Let the worker's stderr through (verbose runs).
+    pub show_stderr: bool,
+}
+
 /// A running worker process.
-#[allow(dead_code)] // used by the worker pool (M4 step 4); unit-tested here
 pub struct Worker {
     child: Child,
     stdin: Option<ChildStdin>,
-    events: Receiver<Event>,
     reader: Option<JoinHandle<()>>,
 }
 
-#[allow(dead_code)] // used by the worker pool (M4 step 4); unit-tested here
 impl Worker {
-    /// Starts `exe` with `args` and only the environment in `env`; its stdout
-    /// is read by a dedicated thread with lines capped at `max_line` bytes.
+    /// Starts a worker; its stdout is read by a dedicated thread that sends
+    /// tagged events to `tx`, with lines capped at `spawn.max_line` bytes.
     ///
     /// # Errors
     /// Spawn failures.
-    pub fn spawn(
-        exe: &Path,
-        args: &[String],
-        env: &[(String, String)],
-        max_line: usize,
-        show_stderr: bool,
-    ) -> io::Result<Worker> {
-        let mut cmd = Command::new(exe);
-        cmd.args(args)
+    pub fn spawn(spawn: &Spawn, tag: Tag, tx: mpsc::Sender<(Tag, Event)>) -> io::Result<Worker> {
+        let mut cmd = Command::new(&spawn.exe);
+        cmd.args(&spawn.args)
             .env_clear()
-            .envs(env.iter().map(|(k, v)| (k, v)))
+            .envs(spawn.env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(if show_stderr {
+            .stderr(if spawn.show_stderr {
                 Stdio::inherit()
             } else {
                 Stdio::null()
@@ -424,14 +456,13 @@ impl Worker {
             .take()
             .ok_or_else(|| io::Error::other("worker stdout not captured"))?;
         let stdin = child.stdin.take();
-        let (tx, rx) = mpsc::channel();
+        let max_line = spawn.max_line;
         let reader = std::thread::Builder::new()
-            .name("rtriage-worker-reader".into())
-            .spawn(move || read_events(io::BufReader::new(stdout), max_line, &tx))?;
+            .name(format!("rtriage-worker-{}", tag.slot))
+            .spawn(move || read_events(io::BufReader::new(stdout), max_line, tag, &tx))?;
         Ok(Worker {
             child,
             stdin,
-            events: rx,
             reader: Some(reader),
         })
     }
@@ -450,21 +481,11 @@ impl Worker {
         stdin.flush()
     }
 
-    /// Next event, waiting at most `timeout`.
-    ///
-    /// # Errors
-    /// [`RecvTimeoutError::Timeout`] when nothing arrived in time.
-    pub fn recv_timeout(&self, timeout: Duration) -> Result<Event, RecvTimeoutError> {
-        self.events.recv_timeout(timeout)
-    }
-
     /// Closes stdin (the worker then exits on its own) and waits for it.
-    pub fn finish(mut self) -> io::Result<std::process::ExitStatus> {
+    pub fn finish(mut self) -> Option<std::process::ExitStatus> {
         drop(self.stdin.take());
-        let status = self.child.wait();
-        if let Some(r) = self.reader.take() {
-            let _ = r.join();
-        }
+        let status = self.child.wait().ok();
+        self.join_reader();
         status
     }
 
@@ -473,16 +494,35 @@ impl Worker {
         drop(self.stdin.take());
         let _ = self.child.kill();
         let status = self.child.wait().ok();
+        self.join_reader();
+        status
+    }
+
+    fn join_reader(&mut self) {
         if let Some(r) = self.reader.take() {
             let _ = r.join();
         }
-        status
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        // Never leave a worker running behind an early return.
+        if self.reader.is_some() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+            self.join_reader();
+        }
     }
 }
 
 /// Reader thread: turns stdout lines into events until EOF or a bad line.
-#[allow(dead_code)] // used by the worker pool (M4 step 4); unit-tested here
-fn read_events(mut reader: impl BufRead, max_line: usize, tx: &mpsc::Sender<Event>) {
+fn read_events(
+    mut reader: impl BufRead,
+    max_line: usize,
+    tag: Tag,
+    tx: &mpsc::Sender<(Tag, Event)>,
+) {
     loop {
         let event = match read_line_bounded(&mut reader, max_line) {
             Ok(Line::Data(l)) if l.is_empty() => continue,
@@ -494,12 +534,11 @@ fn read_events(mut reader: impl BufRead, max_line: usize, tx: &mpsc::Sender<Even
             Ok(Line::Eof) | Err(_) => Event::Closed,
         };
         let stop = !matches!(event, Event::Message(_));
-        if tx.send(event).is_err() || stop {
+        if tx.send((tag, event)).is_err() || stop {
             return;
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -536,11 +575,15 @@ mod tests {
 
     #[test]
     fn reader_stops_on_bad_lines() {
+        let tag = Tag {
+            slot: 0,
+            generation: 0,
+        };
         let (tx, rx) = mpsc::channel();
         let input =
             b"{\"type\":\"ready\",\"protocol\":1}\nnot json\n{\"type\":\"ready\",\"protocol\":1}\n";
-        read_events(io::BufReader::new(&input[..]), 1024, &tx);
-        let got: Vec<_> = rx.try_iter().collect();
+        read_events(io::BufReader::new(&input[..]), 1024, tag, &tx);
+        let got: Vec<_> = rx.try_iter().map(|(_, e)| e).collect();
         assert!(matches!(
             got[0],
             Event::Message(Response::Ready { protocol: 1 })
@@ -549,8 +592,8 @@ mod tests {
         assert_eq!(got.len(), 2, "nothing is read after a bad line");
 
         let (tx, rx) = mpsc::channel();
-        read_events(io::BufReader::new(&[b'x'; 100][..]), 10, &tx);
-        assert!(matches!(rx.try_iter().next(), Some(Event::TooLong)));
+        read_events(io::BufReader::new(&[b'x'; 100][..]), 10, tag, &tx);
+        assert!(matches!(rx.try_iter().next(), Some((_, Event::TooLong))));
     }
 
     #[test]

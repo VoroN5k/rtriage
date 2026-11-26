@@ -25,6 +25,7 @@ use serde::Serialize;
 
 use super::{Failure, Run, SkippedPath};
 use crate::sanitize::sanitize;
+use crate::worker::Summary;
 
 /// Classified strings shown per kind before collapsing into "+N more".
 const STRINGS_PER_KIND: usize = 20;
@@ -454,11 +455,112 @@ fn render_failures(
     }
     writeln!(out, "\n{}", p.heading("Failed"))?;
     for f in failures {
-        writeln!(out, "  {}: {}", sanitize(&f.path), sanitize(&f.error))?;
+        writeln!(
+            out,
+            "  {}: {} ({})",
+            sanitize(&f.path),
+            sanitize(&f.error),
+            enum_name(&f.kind)
+        )?;
     }
     Ok(())
 }
 
+/// The separator printed between reports.
+pub fn write_separator(out: &mut dyn Write) -> io::Result<()> {
+    writeln!(out, "\n{RULE}\n")
+}
+
+/// Failures and skipped paths after a stream of reports.
+pub fn render_tail(
+    failures: &[Failure],
+    skipped: &[SkippedPath],
+    out: &mut dyn Write,
+    color: bool,
+    after_reports: bool,
+) -> io::Result<()> {
+    let p = Painter {
+        color,
+        defang: false,
+    };
+    render_failures(failures, out, &p, after_reports)?;
+    render_skipped(skipped, out, &p)
+}
+
+/// The `scan` table: counts, then one row per file (sorted by the caller),
+/// then failures and skipped paths.
+pub fn render_scan(
+    rows: &[Summary],
+    failures: &[Failure],
+    skipped: &[SkippedPath],
+    out: &mut dyn Write,
+    color: bool,
+) -> io::Result<()> {
+    let p = Painter {
+        color,
+        defang: false,
+    };
+    let c = super::json::Counts::of(rows);
+    writeln!(
+        out,
+        "{}  {} file(s): {} high, {} medium, {} low, {} clean-looking{}",
+        p.heading("Scan"),
+        group_digits(rows.len() as u64),
+        c.high,
+        c.medium,
+        c.low,
+        c.clean_looking,
+        if failures.is_empty() {
+            String::new()
+        } else {
+            format!("; {} failed", failures.len())
+        }
+    )?;
+    if rows.is_empty() {
+        writeln!(out, "  (no files analyzed)")?;
+    } else {
+        writeln!(
+            out,
+            "\n  {:<15} {:>5}  {:<7} {:>10}  {:<32} PATH",
+            "RISK", "SCORE", "TYPE", "SIZE", "TOP FINDING"
+        )?;
+        for r in rows {
+            let (text, color) = risk_badge(r.level);
+            // Pad before styling: escape codes would break the alignment.
+            let badge = format!("{:<15}", format!("[{text}]"));
+            let size = if r.size < 1024 {
+                format!("{} B", r.size)
+            } else {
+                short_size(r.size)
+            };
+            let top = r
+                .top_finding
+                .as_ref()
+                .map_or_else(|| "-".to_owned(), |t| sanitize(&t.id).into_owned());
+            let notes: Vec<&str> = [(r.packed, "packed"), (r.partial, "partial")]
+                .iter()
+                .filter_map(|(on, n)| on.then_some(*n))
+                .collect();
+            writeln!(
+                out,
+                "  {} {:>5}  {:<7} {:>10}  {:<32} {}{}",
+                p.paint(Style::new().bold().fg_color(Some(color.into())), &badge),
+                r.score,
+                format_name(r.format),
+                size,
+                top,
+                sanitize(&r.path),
+                if notes.is_empty() {
+                    String::new()
+                } else {
+                    format!("  ({})", notes.join(", "))
+                }
+            )?;
+        }
+    }
+    render_failures(failures, out, &p, false)?;
+    render_skipped(skipped, out, &p)
+}
 /// Skipped paths shown before collapsing into "+N more".
 const SKIPPED_SHOWN: usize = 20;
 
@@ -1108,6 +1210,7 @@ mod tests {
         Run {
             reports: vec![report],
             failures: vec![Failure {
+                kind: crate::output::FailureKind::Io,
                 path: "missing.bin".into(),
                 error: "cannot read missing.bin: not found".into(),
             }],
