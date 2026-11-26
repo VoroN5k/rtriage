@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 
 use crate::report::{
     AnalysisLimit, Category, Confidence, ExplainerKind, Finding, Reduction, Report, Risk,
-    RiskLevel, ScoreEntry, Severity, Suppression,
+    RiskFloor, RiskLevel, ScoreEntry, Severity, Suppression,
 };
 use crate::rules::{PackerFormat, PackerRuleSet};
 
@@ -59,7 +59,8 @@ pub fn category_cap(category: Category) -> u32 {
         | Category::Network
         | Category::CredentialAccess
         | Category::Collection
-        | Category::Impact => 40,
+        | Category::Impact
+        | Category::Signature => 40,
     }
 }
 
@@ -84,6 +85,29 @@ pub fn score(report: &mut Report, packer_rules: &PackerRuleSet) {
         report.analysis_limited = vec![AnalysisLimit::Packed];
     }
     report.risk = compute(&report.findings);
+    apply_floor(report);
+}
+
+/// Raises `risk.level` to the highest `risk_floor` of a finding that is not
+/// suppressed. The score is left alone (it stays the breakdown sum); the
+/// reason is recorded in `risk.floor`.
+pub fn apply_floor(report: &mut Report) {
+    let floor = report
+        .findings
+        .iter()
+        .filter(|f| f.suppressed.is_none())
+        .filter_map(|f| f.risk_floor.map(|level| (level, f)))
+        .max_by_key(|(level, _)| *level);
+    if let Some((level, f)) = floor {
+        if level > report.risk.level {
+            report.risk.level = level;
+            report.risk.floor = Some(RiskFloor {
+                level,
+                finding: f.id,
+                title: f.title.clone(),
+            });
+        }
+    }
 }
 
 /// Marks findings explained by a **confirmed** packer or runtime.
@@ -223,6 +247,7 @@ pub fn compute(findings: &[Finding]) -> Risk {
         score,
         level: level_for(score),
         breakdown,
+        floor: None,
     }
 }
 

@@ -143,9 +143,17 @@ pub fn scan(
     })
 }
 
-/// Score descending, then path ascending: the riskiest file first, ties stable.
+/// Level descending, then score descending, then path ascending: the
+/// riskiest file first. Level comes first because a rule's `risk_floor` can
+/// raise it above what the score gives; without floors this equals sorting
+/// by score.
 pub fn sort_rows(rows: &mut [Summary]) {
-    rows.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
+    rows.sort_by(|a, b| {
+        b.level
+            .cmp(&a.level)
+            .then_with(|| b.score.cmp(&a.score))
+            .then_with(|| a.path.cmp(&b.path))
+    });
 }
 
 /// stdout (through [`AutoStream`], which strips styles for non-terminals) or
@@ -302,6 +310,15 @@ mod tests {
             partial: false,
             errors: 0,
         }
+    }
+
+    #[test]
+    fn floored_level_sorts_above_score() {
+        let mut floored = row("z", 0);
+        floored.level = RiskLevel::High;
+        let mut rows = vec![row("a", 25), floored];
+        sort_rows(&mut rows);
+        assert_eq!(rows[0].path, "z");
     }
 
     #[test]

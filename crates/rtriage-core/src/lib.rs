@@ -29,6 +29,8 @@ pub mod rules;
 pub mod rules_dir;
 pub mod scoring;
 pub mod walk;
+#[cfg(feature = "yara")]
+pub mod yara;
 
 pub use analyzers::{AnalysisContext, Analyzer, Registry};
 pub use config::{Config, Thresholds};

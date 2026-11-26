@@ -62,6 +62,13 @@ impl Deadline {
         }
     }
 
+    /// Time left; `None` for a deadline that never expires, `Some(ZERO)` once
+    /// it has passed.
+    pub fn remaining(&self) -> Option<Duration> {
+        self.at
+            .map(|at| at.saturating_duration_since(Instant::now()))
+    }
+
     /// The error reported when this deadline is exceeded.
     pub fn timeout_error(&self) -> AnalysisError {
         AnalysisError::Timeout {
@@ -124,6 +131,14 @@ mod tests {
     #[test]
     fn never_does_not_expire() {
         assert_eq!(Deadline::never().check(), Ok(()));
+    }
+
+    #[test]
+    fn remaining_time() {
+        assert_eq!(Deadline::never().remaining(), None);
+        assert_eq!(Deadline::expired().remaining(), Some(Duration::ZERO));
+        let r = Deadline::after(Duration::from_secs(60)).remaining();
+        assert!(r.is_some_and(|r| r > Duration::from_secs(59) && r <= Duration::from_secs(60)));
     }
 
     #[test]

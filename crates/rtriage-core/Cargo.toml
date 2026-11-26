@@ -16,6 +16,12 @@ sha1 = "0.11.0"
 sha2 = "0.11.2"
 thiserror = "2.0.21"
 toml = "1.2.3"
+yara-x = { version = "1.24.0", default-features = false, features = ["constant-folding", "exact-atoms", "fast-regexp", "pe-module", "elf-module", "hash-module", "math-module", "string-module", "time-module"], optional = true }
+
+[features]
+# YARA scanning through yara-x (pure Rust; compiles rules to WebAssembly
+# with wasmtime). Off by default: it adds a large dependency tree.
+yara = ["dep:yara-x"]
 
 [lints]
 workspace = true

@@ -37,7 +37,7 @@ Per category:
 | `anti_analysis` | 15 |
 | `hardening` | 10 |
 | `metadata` | 0 |
-| `injection`, `persistence`, `network`, `credential_access`, `collection`, `impact` | 40 each |
+| `injection`, `persistence`, `network`, `credential_access`, `collection`, `impact`, `signature` | 40 each |
 
 Global: the sum contributed by all `low`-severity findings is at most **15**.
 
@@ -71,6 +71,12 @@ Global: the sum contributed by all `low`-severity findings is at most **15**.
    | 10–29 | `low` |
    | 30–59 | `medium` |
    | ≥ 60 | `high` |
+7. **Risk floor.** If a finding that is not suppressed carries `risk_floor`
+   (a YARA rule's `meta.risk_floor`), the level is raised to the highest such
+   floor when it is above the computed level. The **score is unchanged** (it
+   always equals the breakdown sum); `risk.floor` names the finding and rule,
+   and `--explain` prints the raise. Batch tables sort by level first, then
+   score, so a floored file is not buried under its low score.
 
 Because the highest-severity, highest-confidence findings are taken first,
 caps cut the weakest contributions. `--explain` prints every finding with its
@@ -158,7 +164,8 @@ necessarily causes are explained by it.
 | Spoofed `UPX!` on a section-less RWX ELF (no banner) | nothing suppressed | full score |
 | Go static ELF (runtime recognised) | no-PIE / no-RELRO explained | clean_looking |
 
-These scenarios are end-to-end tests in `scoring.rs` (`end_to_end`,`n`elf_end_to_end`).
+These scenarios are end-to-end tests in `scoring.rs` (`end_to_end`,
+`elf_end_to_end`).
 
 **Packing cap = 30.** Packing on its own can reach the bottom of `medium`
 but never `high`: packers are common in legitimate software (installers,
@@ -880,6 +887,39 @@ explain an API group. An invalid file is a usage error (exit code 2) naming
 the file; other `.toml` files in the directory are reported as warnings
 (likely typos), and a directory with no known file warns that only bundled
 rules apply.
+
+### YARA (`yara` analyzer, cargo feature `yara`)
+
+#### `YARA-MATCH`
+
+| | |
+|---|---|
+| Severity / confidence | From the rule's `meta.severity` / `meta.confidence`; default **Medium / Medium** (11 points) |
+| Category | `meta.category`; default `signature` (cap **40**) |
+| ATT&CK | `meta.attack` (comma/space separated, validated) |
+| Trigger | A configured YARA rule matched the whole file (yara-x, with the `pe`, `elf`, `hash`, `math`, `string` and `time` modules). |
+| Evidence | `field rule = namespace:rule`, `field tags`, `field patterns`, a `range` per matched string (first `max_yara_strings_per_rule` = 16) |
+
+- **One ID for every rule.** Finding IDs must be stable and documented, and
+  rule names are not. Several matching rules each produce a `YARA-MATCH`
+  finding (all listed, rule name in title and evidence), but deduplication by
+  ID lets only the strongest one score: a pile of weak signature hits never
+  inflates the score.
+- **`meta.risk_floor`** (`low|medium|high`): the report's level is at least
+  this while the finding is not suppressed (see "Risk floor" above). Meant
+  for rules that identify something with certainty; bundled rules do not use
+  it.
+- **Validation at load time**: unknown `severity`, `confidence`, `category`,
+  `risk_floor` values or malformed ATT&CK IDs are load errors, not ignored.
+  `include` is disabled, and modules that are not compiled in (`dotnet`,
+  `macho`, `vt`, ...) are compile errors.
+- **Bounds**: yara-x's timeout is the time left on the file's deadline (it
+  may overrun slightly; in batch mode the worker kill is the hard limit), at
+  most `max_yara_pattern_matches` (1000) matches per pattern and
+  `max_yara_matches` (256) matching rules kept per file. The scan runs under
+  `catch_unwind`.
+- **False positives** are the rule author's: rtriage reports which rule
+  matched and where, and scores it like any other finding.
 
 ### Facts that suppress heuristics
 

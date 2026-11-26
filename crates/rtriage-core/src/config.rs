@@ -33,6 +33,10 @@ pub struct Config {
     /// Packer explanations; `None` = the bundled `rules/packers.toml`.
     #[serde(skip)]
     pub packer_rules: Option<Arc<PackerRuleSet>>,
+    /// Compiled YARA rules; `None` = no YARA scan.
+    #[cfg(feature = "yara")]
+    #[serde(skip)]
+    pub yara: Option<Arc<crate::yara::YaraRules>>,
 }
 
 impl Config {
@@ -53,6 +57,8 @@ impl Default for Config {
             elf_api_rules: None,
             ioc_allowlist: None,
             packer_rules: None,
+            #[cfg(feature = "yara")]
+            yara: None,
         }
     }
 }

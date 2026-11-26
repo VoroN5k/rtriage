@@ -64,7 +64,8 @@ One JSON object per line. Lines in completion order, then exactly one
 | `failure` | as each file fails | the [Failure](#failure) fields |
 | `summary` | last line | `schema_version`, `tool`, `rows`, `counts`, `failures`, `skipped` |
 
-`rows` (sorted by `score` descending, then `path` ascending): `path`,
+`rows` (sorted by `level` descending, then `score` descending, then `path`
+ascending; level first because a YARA `risk_floor` can raise it): `path`,
 `format`, `size`, `score`, `level`, `top_finding` (`{ id, title, severity }`
 of the highest-ranked finding that scored, else the first finding, else
 `null`), `packed` (bool), `partial` (bool: an analyzer timed out), `errors`
@@ -81,6 +82,7 @@ Only rows are kept in memory during a scan; full reports are streamed.
 | `risk.score` | integer | Aggregate score for sorting (see `heuristics.md`, "Scoring v1"). |
 | `risk.level` | enum | `clean_looking` \| `low` \| `medium` \| `high`. |
 | `risk.breakdown` | array | One entry per finding in scoring order: `{ id, category, table_points, points, reduced_by? }`. `reduced_by` is `{ kind: "suppressed", explainer, name, by }` (`explainer` is `packer` or `runtime`; `by` is `null` for runtimes), `{ kind: "duplicate" }`, `{ kind: "category_cap", cap }` or `{ kind: "low_severity_cap", cap }`. Not affected by `--min-severity`. |
+| `risk.floor` | object (optional) | Present when a finding's `risk_floor` raised `risk.level` above what `risk.score` gives: `{ level, finding, title }`. The score itself is never changed and still equals the sum of `breakdown` points. |
 | `analysis_limited` | array of enum | Why static analysis is less complete: `packed`. Empty normally. |
 | `errors` | array of [AnalyzerFailure](#analyzerfailure) | Analyzers that failed; the rest of the report is still valid. |
 
@@ -116,7 +118,12 @@ Every member is `null` if its analyzer did not run.
 | `items_included` | enum | `classified` (default: only strings with `kinds`) \| `all` (`--all-strings`). |
 | `items` | array | See below, sorted by offset. |
 
-**`runtime`** (any format; `null` unless at least two independent`nindicators agree): `{ language, version, indicators }`. `language` is`n`go` or `rust`; `version` is e.g. `go1.22.5` or `rustc <commit>`, or`n`null`. Indicators: Go `go_buildinfo`, `go_build_id`, `go_sections`,`n`go_runtime_strings`; Rust `rustc_path`, `panic_messages`,`n`mangled_symbols`.
+**`runtime`** (any format; `null` unless at least two independent
+indicators agree): `{ language, version, indicators }`. `language` is
+`go` or `rust`; `version` is e.g. `go1.22.5` or `rustc <commit>`, or
+`null`. Indicators: Go `go_buildinfo`, `go_build_id`, `go_sections`,
+`go_runtime_strings`; Rust `rustc_path`, `panic_messages`,
+`mangled_symbols`.
 
 **`iocs`** (any format; `null` if the analyzer did not run)
 
@@ -136,6 +143,12 @@ of `--defang`; equal to `value` for wallets), `scope` (IPs only, else
 containing strings, first 8, ascending).
 
 `--defang` changes only the text output; JSON is identical with or without it.
+
+**`yara`** (`null` unless YARA rules were configured; feature `yara`):
+`{ rules_loaded, matches, limit_reached }`. Each match: `{ rule, namespace,
+tags, meta, strings }`; `meta` is `[[name, value], ...]` with values as text;
+`strings` is `[{ id, offset, len }]` (at most `max_yara_strings_per_rule`).
+At most `max_yara_matches` matches are kept (`limit_reached`).
 
 **`pe`** (non-PE input: `null`). Each part is `null` if its analyzer failed.
 
@@ -252,9 +265,12 @@ textrel }`. `imports` are undefined named dynamic symbols in table order;
 `symbol_count_source` is `section`, `dt_hash`, `dt_gnu_hash`, `strtab_gap`
 or `none`.
 
-`elf.packers`: same shape as `pe.packers`; ELF indicators are`nheader_signature`, `info_banner`, `stub_structure`.
+`elf.packers`: same shape as `pe.packers`; ELF indicators are
+`header_signature`, `info_banner`, `stub_structure`.
 
-`elf.notes` (`null` if the file has no notes): `{ build_id, go_build_id,`nabi_tag, count, limit_reached }`; `build_id` is lowercase hex, `abi_tag`nlike `linux 3.2.0`; at most `max_notes` (256) notes are read.
+`elf.notes` (`null` if the file has no notes): `{ build_id, go_build_id,
+abi_tag, count, limit_reached }`; `build_id` is lowercase hex, `abi_tag`
+like `linux 3.2.0`; at most `max_notes` (256) notes are read.
 
 `elf.checksec`: `{ pie, nx, nx_source, relro, bind_now, canary, fortify,
 stripped }`; `pie`, `canary`, `fortify` are `null` when not applicable or
@@ -281,12 +297,13 @@ before displaying**), `truncated` (bool), `kinds` (array, omitted when empty).
 | `id` | string | Stable identifier, documented in `heuristics.md`. |
 | `severity` | enum | `info` \| `low` \| `medium` \| `high`. |
 | `confidence` | enum | `low` \| `medium` \| `high`. |
-| `category` | enum | `packing`, `obfuscation`, `anti_analysis`, `injection`, `persistence`, `network`, `credential_access`, `collection`, `impact`, `hardening`, `anomaly`, `metadata`. |
+| `category` | enum | `packing`, `obfuscation`, `anti_analysis`, `injection`, `persistence`, `network`, `credential_access`, `collection`, `impact`, `hardening`, `anomaly`, `metadata`, `signature` (YARA). |
 | `title` | string | One-line summary. |
 | `detail` | string | Explanation. |
 | `evidence` | array | Tagged by `type`: `range {offset,len}`, `section {index,name}`, `import {library,symbol}`, `string {offset,encoding,value}`, `metric {name,value}`, `field {name,value}`. |
 | `attack` | array of string | MITRE ATT&CK technique IDs. |
 | `suppressed` | object (optional) | Present when a confirmed packer or runtime explains the finding: `{ kind, name, by }`, `kind` is `packer` or `runtime`, `by` is the finding naming the packer (`PE-PACKER-KNOWN` / `ELF-PACKER-KNOWN`) or `null` for runtimes. E.g. `{ "kind": "packer", "name": "UPX", "by": "PE-PACKER-KNOWN" }`. Such findings score 0. |
+| `risk_floor` | enum (optional) | `low` \| `medium` \| `high`: the report's level is at least this while the finding is not suppressed (YARA `meta.risk_floor`). |
 
 `--min-severity` removes findings below the level from `findings` only;
 `risk` always reflects all findings.

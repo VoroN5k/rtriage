@@ -16,6 +16,8 @@ pub mod pe;
 pub mod rule_engine;
 pub mod runtime;
 pub mod strings;
+#[cfg(feature = "yara")]
+pub mod yara;
 
 use std::sync::OnceLock;
 use std::time::SystemTime;
@@ -209,6 +211,16 @@ impl std::fmt::Debug for Registry {
 impl Default for Registry {
     /// All built-in analyzers.
     fn default() -> Self {
+        let registry = Self::builtin();
+        #[cfg(feature = "yara")]
+        let registry = registry.with(yara::YaraAnalyzer);
+        registry
+    }
+}
+
+impl Registry {
+    /// Every analyzer that needs no optional cargo feature.
+    fn builtin() -> Self {
         Self::empty()
             .with(hashes::HashesAnalyzer)
             .with(entropy::EntropyAnalyzer)
@@ -399,7 +411,11 @@ mod tests {
             Deadline::expired(),
         );
         let names: Vec<_> = report.errors.iter().map(|e| e.analyzer).collect();
-        assert_eq!(names, ["entropy", "hashes", "iocs", "strings"]);
+        #[allow(unused_mut)]
+        let mut expected = vec!["entropy", "hashes", "iocs", "strings"];
+        #[cfg(feature = "yara")]
+        expected.push("yara");
+        assert_eq!(names, expected);
         assert!(report
             .errors
             .iter()

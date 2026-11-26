@@ -507,7 +507,8 @@ fn pattern(id: &str, p: &str) -> Result<ApiPattern, RulesError> {
     })
 }
 
-fn is_attack_id(t: &str) -> bool {
+/// `T1234` or `T1234.567`.
+pub(crate) fn is_attack_id(t: &str) -> bool {
     let Some(rest) = t.strip_prefix('T') else {
         return false;
     };
@@ -527,7 +528,8 @@ fn invalid(id: &str, reason: &str) -> RulesError {
 }
 
 /// Gives a string a `'static` lifetime (see module docs for why this is bounded).
-fn intern(s: String) -> &'static str {
+/// Leaks `s` for a `&'static str` (rule data is loaded once per run).
+pub(crate) fn intern(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 

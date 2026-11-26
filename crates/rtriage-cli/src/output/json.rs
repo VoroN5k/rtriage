@@ -220,8 +220,24 @@ mod tests {
 
     #[test]
     fn snapshot_default() {
-        let v = render_value(&sample_run(false));
+        let v = sorted(render_value(&sample_run(false)));
         insta::assert_snapshot!(serde_json::to_string_pretty(&v).unwrap());
+    }
+
+    /// Keys sorted at every level, so the snapshot does not depend on
+    /// serde_json's `preserve_order` feature (yara-x enables it).
+    fn sorted(v: serde_json::Value) -> serde_json::Value {
+        match v {
+            serde_json::Value::Object(m) => {
+                let b: std::collections::BTreeMap<_, _> =
+                    m.into_iter().map(|(k, v)| (k, sorted(v))).collect();
+                serde_json::Value::Object(b.into_iter().collect())
+            }
+            serde_json::Value::Array(a) => {
+                serde_json::Value::Array(a.into_iter().map(sorted).collect())
+            }
+            other => other,
+        }
     }
 
     #[test]

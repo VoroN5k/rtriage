@@ -76,7 +76,8 @@ expression: "serde_json::to_string_pretty(&v).unwrap()"
           "limit_reached": false,
           "min_len": 5,
           "total": 19
-        }
+        },
+        "yara": null
       },
       "file": {
         "format": "unknown",

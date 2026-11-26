@@ -57,6 +57,15 @@ of the claimed size.
 - Files reached twice (overlapping roots) are analyzed once (canonical path).
 - Walking never opens files; size and format checks happen at load time.
 
+**YARA** (feature `yara`, `crates/rtriage-core/src/yara.rs`). yara-x's `pe`
+and `elf` modules parse the hostile file themselves, so the scan runs under
+`catch_unwind`, with yara-x's timeout set to the time left on the file's
+deadline and `max_yara_pattern_matches` / `max_yara_matches` /
+`max_yara_strings_per_rule` limits. yara-x may overrun its timeout slightly;
+in batch mode the worker kill (`--timeout` + 5 s) is the hard limit. Rule
+sources compile with `include` disabled. Compiled rules are deserialized only
+from bytes this program serialized (the parent→worker pipe), never from a
+file: they contain precompiled code.
 ## 3. Time limit (`crates/rtriage-core/src/deadline.rs`)
 
 Rust threads cannot be killed from outside, so the limit is **cooperative**:
@@ -103,6 +112,11 @@ The CLI exposes `--timeout <SECONDS>` (default 30, `0` is rejected).
   finishes in seconds. Long run:
   `PROPTEST_CASES=100000 cargo test -p rtriage-core --test robustness_elf --release`
   (500 000 ELF cases passed when step 8 of M3 landed).
+- **YARA path** (`robustness_yara.rs`, feature `yara`): the mutated PE and
+  ELF corpora and random bytes are scanned with rules that walk the `pe` and
+  `elf` module structures; any error from the `yara` analyzer other than a
+  timeout (e.g. a caught panic) fails the test. 40 000 release cases passed
+  when M4 step 5 landed.
 - **Unit tests** for each bounded parser: huge header counts, oversized
   note sizes, `max_notes`, budget and deadline on long note walks, GNU hash
   chains without an end bit.

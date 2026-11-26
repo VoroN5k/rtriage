@@ -159,9 +159,16 @@ fn render_header(r: &Report, out: &mut dyn Write, p: &Painter) -> io::Result<()>
     } else {
         String::new()
     };
+    let floor = r.risk.floor.as_ref().map_or_else(String::new, |f| {
+        format!(
+            " (level raised to {} by {})",
+            enum_name(&f.level),
+            sanitize(&f.title)
+        )
+    });
     writeln!(
         out,
-        "  {}  {} score {}{limited}",
+        "  {}  {} score {}{floor}{limited}",
         p.label("Risk   "),
         p.paint(
             Style::new().bold().fg_color(Some(color.into())),
@@ -179,6 +186,16 @@ fn render_explain(risk: &Risk, out: &mut dyn Write, p: &Painter) -> io::Result<(
         risk.score,
         enum_name(&risk.level)
     )?;
+    if let Some(f) = &risk.floor {
+        writeln!(
+            out,
+            "  level raised from {} to {} by {} ({}); the score is unchanged",
+            enum_name(&rtriage_core::scoring::level_for(risk.score)),
+            enum_name(&f.level),
+            f.finding,
+            sanitize(&f.title)
+        )?;
+    }
     if risk.breakdown.is_empty() {
         return writeln!(out, "  (no findings)");
     }

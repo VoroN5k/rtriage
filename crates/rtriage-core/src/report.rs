@@ -62,6 +62,45 @@ pub struct Facts {
     /// Indicators of compromise extracted from strings; `None` until the
     /// IOC analyzer has run.
     pub iocs: Option<IocFacts>,
+    /// YARA matches; `None` unless YARA rules were configured.
+    pub yara: Option<YaraFacts>,
+}
+
+/// Result of the YARA scan.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct YaraFacts {
+    /// Rules compiled into the scanned set.
+    pub rules_loaded: usize,
+    /// Matching rules, in rule-set order (at most `max_yara_matches`).
+    pub matches: Vec<YaraMatch>,
+    /// `true` if more rules matched than were kept.
+    pub limit_reached: bool,
+}
+
+/// One matching YARA rule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct YaraMatch {
+    /// Rule identifier.
+    pub rule: String,
+    /// Namespace (one per rule file).
+    pub namespace: String,
+    /// Tags.
+    pub tags: Vec<String>,
+    /// Metadata as `name -> value` (strings, integers, floats, booleans as text).
+    pub meta: Vec<(String, String)>,
+    /// Pattern matches (first few overall).
+    pub strings: Vec<YaraStringMatch>,
+}
+
+/// Where one pattern matched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct YaraStringMatch {
+    /// Pattern identifier, e.g. ``.
+    pub id: String,
+    /// File offset.
+    pub offset: u64,
+    /// Match length.
+    pub len: u64,
 }
 
 /// ELF facts; each part is filled by its own analyzer.
@@ -830,6 +869,8 @@ pub enum Category {
     Anomaly,
     /// Neutral metadata (compiler, build paths, signatures).
     Metadata,
+    /// A signature (YARA rule) matched.
+    Signature,
 }
 
 /// Text encoding of an extracted string.
@@ -919,6 +960,10 @@ pub struct Finding {
     /// consumes no category cap.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suppressed: Option<Suppression>,
+    /// Minimum risk level a report containing this finding gets (YARA
+    /// `meta.risk_floor`); ignored while the finding is suppressed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk_floor: Option<RiskLevel>,
 }
 
 /// Why a finding does not count towards the score.
@@ -972,7 +1017,15 @@ impl Finding {
             evidence: Vec::new(),
             attack: Vec::new(),
             suppressed: None,
+            risk_floor: None,
         }
+    }
+
+    /// Sets the minimum risk level a report containing this finding gets.
+    #[must_use]
+    pub fn risk_floor(mut self, level: RiskLevel) -> Self {
+        self.risk_floor = Some(level);
+        self
     }
 
     /// Sets the confidence.
@@ -1031,6 +1084,22 @@ pub struct Risk {
     pub level: RiskLevel,
     /// One entry per finding, in scoring order.
     pub breakdown: Vec<ScoreEntry>,
+    /// Set when a finding's `risk_floor` raised `level` above what the score
+    /// gives (the score itself is unchanged, so it still equals the breakdown).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub floor: Option<RiskFloor>,
+}
+
+/// A minimum risk level imposed by a finding (e.g. a YARA rule's
+/// `meta.risk_floor`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RiskFloor {
+    /// The level imposed.
+    pub level: RiskLevel,
+    /// Finding that imposed it.
+    pub finding: &'static str,
+    /// That finding's title (names the rule).
+    pub title: String,
 }
 
 /// How one finding contributed to the score.
