@@ -24,8 +24,8 @@ use rtriage_core::{
 use serde::Serialize;
 
 use super::{Failure, Run, SkippedPath};
-use crate::sanitize::sanitize;
 use crate::worker::Summary;
+use rtriage_sanitize::sanitize;
 
 /// Classified strings shown per kind before collapsing into "+N more".
 const STRINGS_PER_KIND: usize = 20;

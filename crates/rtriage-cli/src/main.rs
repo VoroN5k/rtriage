@@ -5,7 +5,6 @@ mod cli;
 mod modes;
 mod output;
 mod pool;
-mod sanitize;
 mod worker;
 
 use std::fs::File;
@@ -25,7 +24,7 @@ use tracing::level_filters::LevelFilter;
 use crate::cli::{Cli, Command, OutputFormat};
 use crate::output::text::TextOptions;
 use crate::output::{Failure, FailureKind, Run, SkippedPath};
-use crate::sanitize::sanitize;
+use rtriage_sanitize::sanitize;
 
 /// At least one file could not be analyzed, or output could not be written.
 const EXIT_RUNTIME_ERROR: u8 = 1;

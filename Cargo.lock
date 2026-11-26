@@ -1868,6 +1868,7 @@ dependencies = [
  "insta",
  "rtriage-core",
  "rtriage-fixtures",
+ "rtriage-sanitize",
  "serde",
  "serde_json",
  "tracing",
@@ -1898,6 +1899,10 @@ version = "0.1.0"
 dependencies = [
  "goblin",
 ]
+
+[[package]]
+name = "rtriage-sanitize"
+version = "0.1.0"
 
 [[package]]
 name = "rustc-demangle"

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/rtriage-core", "crates/rtriage-cli", "crates/rtriage-fixtures"]
+members = ["crates/rtriage-core", "crates/rtriage-cli", "crates/rtriage-fixtures", "crates/rtriage-sanitize"]
 # cargo-fuzz targets build separately with nightly (see fuzz/README.md).
 exclude = ["fuzz"]
 

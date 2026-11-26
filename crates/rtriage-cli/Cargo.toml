@@ -17,6 +17,7 @@ anstyle = "1.0.14"
 anyhow = "1.0.105"
 clap = { version = "4.6.10", features = ["derive"] }
 rtriage-core = { path = "../rtriage-core" }
+rtriage-sanitize = { path = "../rtriage-sanitize" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tracing = "0.1.44"
