@@ -31,6 +31,7 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
                 sections: ListState::new(model::section_count(&report)),
                 segments: ListState::new(rows::segment_count(&report)),
                 iocs: ListState::new(rows::ioc_count(&report)),
+                explain: ListState::new(report.risk.breakdown.len()),
                 imports: ListState::new(model::import_rows(&report).len()),
                 string_rows: report
                     .facts
@@ -336,10 +337,31 @@ fn navigate(app: &mut App, code: KeyCode) {
     let rows = app.list_rows();
     if app.tab == Tab::Findings {
         findings_key(app, code, rows);
+    } else if app.tab == Tab::Explain && code == KeyCode::Enter {
+        explain_jump(app);
     } else if let (Some(step), Some(list)) = (movement(code), app.panes.list_mut(app.tab)) {
         step(list, rows);
         list.follow(rows);
     }
+}
+
+/// Enter on a score row: show the finding it scores.
+fn explain_jump(app: &mut App) {
+    let Some(row) = app.panes.explain.selected() else {
+        return;
+    };
+    let Some(target) = app.report().and_then(|r| model::finding_for_entry(r, row)) else {
+        app.status = Some("this score entry has no matching finding".into());
+        return;
+    };
+    let here = location(app);
+    app.history.push(here);
+    app.tab = Tab::Findings;
+    app.panes.focus = Focus::List;
+    let rows = app.rows_for(Tab::Findings);
+    app.panes.findings.select(target);
+    app.panes.findings.follow(rows);
+    finding_changed(app);
 }
 
 fn findings_key(app: &mut App, code: KeyCode, rows: usize) {
@@ -1032,12 +1054,14 @@ mod search_tests {
     }
 
     #[test]
-    fn search_is_unavailable_without_a_list() {
+    fn every_tab_can_be_searched() {
         let mut a = app();
-        update(&mut a, key(KeyCode::Char('6')));
-        update(&mut a, key(KeyCode::Char('/')));
-        assert_eq!(a.prompt, None);
-        assert!(a.status.is_some());
+        for tab in '1'..='6' {
+            update(&mut a, key(KeyCode::Char(tab)));
+            update(&mut a, key(KeyCode::Char('/')));
+            assert_eq!(a.prompt.as_deref(), Some(""), "tab {tab}");
+            update(&mut a, key(KeyCode::Esc));
+        }
     }
 
     #[test]
@@ -1458,6 +1482,106 @@ mod copy_tests {
         let mut a = iocs_app();
         update(&mut a, key(KeyCode::Char('6')));
         assert!(update(&mut a, key(KeyCode::Char('y'))).is_empty());
+        assert_eq!(a.tab, Tab::Explain);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod explain_tests {
+    use ratatui::crossterm::event::KeyCode;
+    use rtriage_core::rules::PackerRuleSet;
+    use rtriage_core::{Category, Finding, Severity};
+
+    use super::*;
+    use crate::app::Tab;
+    use crate::testkit::{key, ready_app, suspicious_pe};
+
+    fn app() -> App {
+        let mut a = ready_app("s.exe", suspicious_pe(), (100, 30));
+        update(&mut a, key(KeyCode::Char('6')));
+        a
+    }
+
+    #[test]
+    fn explain_rows_follow_the_breakdown() {
+        let a = app();
+        let r = a.report().unwrap();
+        assert_eq!(a.panes.explain.len(), r.risk.breakdown.len());
+        let sum: u32 = r.risk.breakdown.iter().map(|e| e.points).sum();
+        assert_eq!(sum, r.risk.score, "the tab's total is the breakdown sum");
+    }
+
+    #[test]
+    fn enter_on_breakdown_row_jumps_to_finding_and_back() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Down));
+        let entry = a.report().unwrap().risk.breakdown[1].id;
+        update(&mut a, key(KeyCode::Enter));
+        assert_eq!(a.tab, Tab::Findings);
+        let f = &a.report().unwrap().findings[a.panes.findings.selected().unwrap()];
+        assert_eq!(f.id, entry);
+        assert_eq!(a.panes.evidence.len(), f.evidence.len());
+        update(&mut a, key(KeyCode::Backspace));
+        assert_eq!(a.tab, Tab::Explain);
+        assert_eq!(a.panes.explain.selected(), Some(1));
+    }
+
+    #[test]
+    fn duplicate_ids_map_to_the_matching_occurrence() {
+        let mut a = app();
+        if let Phase::Ready(r) = &mut a.phase {
+            for title in ["first", "second"] {
+                r.findings.push(Finding::new(
+                    "TEST-DUP",
+                    Severity::Low,
+                    Category::Anomaly,
+                    title,
+                ));
+            }
+            rtriage_core::scoring::score(r, PackerRuleSet::bundled().unwrap());
+            a.panes.explain = ListState::new(r.risk.breakdown.len());
+            a.panes.findings = ListState::new(r.findings.len());
+        }
+        let r = a.report().unwrap();
+        let dups: Vec<usize> = r
+            .risk
+            .breakdown
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.id == "TEST-DUP")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(dups.len(), 2);
+        a.panes.explain.select(dups[1]);
+        update(&mut a, key(KeyCode::Enter));
+        let f = &a.report().unwrap().findings[a.panes.findings.selected().unwrap()];
+        assert_eq!((f.id, f.title.as_str()), ("TEST-DUP", "second"));
+    }
+
+    #[test]
+    fn search_works_in_explain() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Char('/')));
+        for c in "overlay-high".chars() {
+            update(&mut a, key(KeyCode::Char(c)));
+        }
+        update(&mut a, key(KeyCode::Enter));
+        let row = a.panes.explain.selected().unwrap();
+        assert_eq!(
+            a.report().unwrap().risk.breakdown[row].id,
+            "PE-OVERLAY-HIGH-ENTROPY"
+        );
+    }
+
+    #[test]
+    fn empty_breakdown_is_safe() {
+        let mut a = ready_app("t.txt", b"plain".to_vec(), (100, 30));
+        update(&mut a, key(KeyCode::Char('6')));
+        assert!(a.panes.explain.is_empty());
+        for k in [KeyCode::Enter, KeyCode::Down, KeyCode::End] {
+            assert!(update(&mut a, key(k)).is_empty());
+        }
         assert_eq!(a.tab, Tab::Explain);
     }
 }

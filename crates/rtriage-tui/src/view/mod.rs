@@ -1,6 +1,7 @@
 //! Drawing. Reads [`App`], never changes it. Every string that comes from
 //! the analysed file goes through [`rtriage_sanitize::single_line`].
 
+mod explain;
 mod findings;
 mod help;
 mod imports;
@@ -191,12 +192,7 @@ fn ready(app: &App, report: &Report, frame: &mut Frame<'_>, area: Rect) {
         Tab::Imports => imports::draw(app, report, frame, body),
         Tab::Strings => strings::draw(app, report, frame, body),
         Tab::Iocs => iocs::draw(app, report, frame, body),
-        _ => {
-            let block = Block::new()
-                .borders(Borders::ALL)
-                .title(format!(" {} ", app.tab.title()));
-            frame.render_widget(Paragraph::new(placeholder(app)).block(block), body);
-        }
+        Tab::Explain => explain::draw(app, report, frame, body),
     }
 
     let mut status_spans = Vec::new();
@@ -233,19 +229,6 @@ fn ready(app: &App, report: &Report, frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(Line::from(status_spans), status);
 }
 
-/// Body text until each tab gets its own view (later M5 steps).
-fn placeholder(app: &App) -> String {
-    let row = app
-        .panes
-        .list(app.tab)
-        .and_then(|l| {
-            l.selected()
-                .map(|r| format!(" · row {} of {}", r + 1, l.len()))
-        })
-        .unwrap_or_default();
-    format!("(coming in a later step){row}")
-}
-
 /// The snake_case name serde uses for a unit enum variant, from its `Debug`
 /// form (`CredentialAccess` → `credential_access`), so the TUI and the JSON
 /// output agree.
@@ -263,4 +246,12 @@ pub(crate) fn snake<T: std::fmt::Debug>(value: &T) -> String {
         }
     }
     out
+}
+
+/// Rows `lines` take when wrapped to `width` columns (approximate: by
+/// display width, ignoring word boundaries).
+pub(crate) fn wrapped_height(lines: &[Line<'_>], width: u16) -> u16 {
+    let width = usize::from(width.max(1));
+    let rows: usize = lines.iter().map(|l| l.width().div_ceil(width).max(1)).sum();
+    u16::try_from(rows).unwrap_or(u16::MAX)
 }

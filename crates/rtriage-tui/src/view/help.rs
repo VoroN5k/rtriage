@@ -14,7 +14,7 @@ const KEYS: [(&str, &str); 17] = [
     ("↑↓ j k", "move"),
     ("PgUp PgDn Home End", "move by page / to the ends"),
     ("← → h l", "findings list / evidence"),
-    ("Enter", "select; on evidence: jump to it"),
+    ("Enter", "select; on evidence or a score row: jump to it"),
     ("Backspace / Alt-←", "go back"),
     (
         "/  n  N",

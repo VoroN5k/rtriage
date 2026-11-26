@@ -161,7 +161,7 @@ pub fn searchable<'a>(
             let raw = app.panes.raw_iocs;
             Box::new(move |r| ioc(report, r, raw).map(|c| c.join(" ")))
         }
-        Tab::Explain => return None,
+        Tab::Explain => Box::new(move |r| explain(report, r).map(|c| c.join(" "))),
     })
 }
 
@@ -236,4 +236,51 @@ pub fn ioc(report: &Report, row: usize, raw: bool) -> Option<Vec<String>> {
             ]
         }
     })
+}
+
+/// Column titles of the score breakdown.
+pub const EXPLAIN_COLUMNS: [&str; 4] = ["Points", "Finding", "Category", "Note"];
+
+/// Cells of breakdown row `row`. Suppressed entries carry `~` like the
+/// findings list.
+pub fn explain(report: &Report, row: usize) -> Option<Vec<String>> {
+    use rtriage_core::report::{ExplainerKind, Reduction};
+    let e = report.risk.breakdown.get(row)?;
+    let note = match &e.reduced_by {
+        None if e.table_points == 0 => "informational".to_owned(),
+        None => String::new(),
+        Some(Reduction::Suppressed {
+            explainer,
+            name,
+            by,
+        }) => {
+            let who = match (explainer, by) {
+                (ExplainerKind::Runtime, _) => format!("the {name} runtime"),
+                (_, Some(by)) => format!("{name} ({by})"),
+                (_, None) => (*name).to_owned(),
+            };
+            format!("explained by {who}, not scored")
+        }
+        Some(Reduction::Duplicate) => "duplicate ID, counted once".to_owned(),
+        Some(Reduction::CategoryCap { cap }) => format!(
+            "of {}; {} cap {cap} reached",
+            e.table_points,
+            snake(&e.category)
+        ),
+        Some(Reduction::LowSeverityCap { cap }) => {
+            format!("of {}; low-severity cap {cap} reached", e.table_points)
+        }
+        Some(_) => "reduced".to_owned(),
+    };
+    let mark = if matches!(e.reduced_by, Some(Reduction::Suppressed { .. })) {
+        "~"
+    } else {
+        ""
+    };
+    Some(vec![
+        format!("+{}", e.points),
+        format!("{mark}{}", e.id),
+        snake(&e.category),
+        note,
+    ])
 }

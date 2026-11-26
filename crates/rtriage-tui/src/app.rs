@@ -118,6 +118,8 @@ pub struct Panes {
     pub string_filter: StringFilter,
     /// IOCs list: the file hashes first, then the indicators.
     pub iocs: ListState,
+    /// Score breakdown rows (Explain tab).
+    pub explain: ListState,
     /// Show IOCs as found instead of defanged.
     pub raw_iocs: bool,
     /// Details of the selected evidence item if it is a byte range.
@@ -134,7 +136,7 @@ impl Panes {
             Tab::Imports => Some(&mut self.imports),
             Tab::Strings => Some(&mut self.strings),
             Tab::Iocs => Some(&mut self.iocs),
-            Tab::Explain => None,
+            Tab::Explain => Some(&mut self.explain),
         }
     }
 
@@ -147,7 +149,7 @@ impl Panes {
             Tab::Imports => Some(&self.imports),
             Tab::Strings => Some(&self.strings),
             Tab::Iocs => Some(&self.iocs),
-            Tab::Explain => None,
+            Tab::Explain => Some(&self.explain),
         }
     }
 }

@@ -8,7 +8,7 @@ use ratatui::Frame;
 use rtriage_core::{Evidence, Finding, Report};
 use rtriage_sanitize::single_line;
 
-use super::{level_name, snake};
+use super::{level_name, snake, wrapped_height};
 use crate::app::{App, Focus};
 use crate::jump::{self, RangeInfo, RANGE_ENTROPY_CAP};
 use crate::list::ListState;
@@ -150,13 +150,6 @@ fn detail_lines(f: &Finding) -> Vec<Line<'static>> {
     lines.push(Line::from(""));
     lines.push(Line::from(single_line(&f.detail).into_owned()));
     lines
-}
-
-/// Rows `lines` take when wrapped to `width` columns (approximate: by chars).
-fn wrapped_height(lines: &[Line<'_>], width: u16) -> u16 {
-    let width = usize::from(width.max(1));
-    let rows: usize = lines.iter().map(|l| l.width().div_ceil(width).max(1)).sum();
-    u16::try_from(rows).unwrap_or(u16::MAX)
 }
 
 fn evidence_list(f: &Finding, state: &ListState, focused: bool, frame: &mut Frame<'_>, area: Rect) {

@@ -11,7 +11,7 @@ expression: render(&app)
 "│I│ ↑↓ j k             move                                                  │ │"
 "│ │ PgUp PgDn Home End move by page / to the ends                            │ │"
 "│ │ ← → h l            findings list / evidence                              │ │"
-"│ │ Enter              select; on evidence: jump to it                       │ │"
+"│ │ Enter              select; on evidence or a score row: jump to it        │ │"
 "│ │ Backspace / Alt-←  go back                                               │t│"
 "│ │ /  n  N            search this list (case-insensitive) · next · previous │ │"
 "│ │ s                  Sections tab of an ELF: section headers / segments    │ │"

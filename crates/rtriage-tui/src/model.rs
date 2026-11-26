@@ -100,3 +100,18 @@ pub fn string_row(report: &Report, offset: u64) -> Option<usize> {
     let items = &report.facts.strings.as_ref()?.items;
     items.binary_search_by_key(&offset, |s| s.offset).ok()
 }
+
+/// Finding scored by breakdown entry `row`: the entry's ID, matched by
+/// occurrence (the n-th entry with an ID belongs to the n-th finding with it).
+pub fn finding_for_entry(report: &Report, row: usize) -> Option<usize> {
+    let breakdown = &report.risk.breakdown;
+    let id = breakdown.get(row)?.id;
+    let nth = breakdown.get(..row)?.iter().filter(|e| e.id == id).count();
+    report
+        .findings
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.id == id)
+        .nth(nth)
+        .map(|(i, _)| i)
+}
