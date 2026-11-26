@@ -4,6 +4,9 @@ use std::sync::Arc;
 
 use rtriage_core::{AnalysisLimit, Input, Report};
 
+use crate::jump::{History, RangeInfo};
+use crate::list::ListState;
+
 /// Smallest terminal the TUI draws in; below it only a notice is shown.
 pub const MIN_SIZE: (u16, u16) = (60, 16);
 
@@ -77,6 +80,60 @@ pub enum Phase {
     Failed,
 }
 
+/// Which pane of the Findings tab has the cursor.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Focus {
+    /// The findings list (left).
+    #[default]
+    List,
+    /// The evidence list of the selected finding (right).
+    Evidence,
+}
+
+/// Cursor state of every list, kept apart from the report so both can be
+/// borrowed at once.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Panes {
+    /// Findings list.
+    pub findings: ListState,
+    /// Evidence of the selected finding.
+    pub evidence: ListState,
+    /// Focused pane of the Findings tab.
+    pub focus: Focus,
+    /// Sections list.
+    pub sections: ListState,
+    /// Imports list.
+    pub imports: ListState,
+    /// Strings list.
+    pub strings: ListState,
+    /// Details of the selected evidence item if it is a byte range.
+    pub range: Option<RangeInfo>,
+}
+
+impl Panes {
+    /// The main list of `tab`, if it has one.
+    pub fn list_mut(&mut self, tab: Tab) -> Option<&mut ListState> {
+        match tab {
+            Tab::Findings => Some(&mut self.findings),
+            Tab::Sections => Some(&mut self.sections),
+            Tab::Imports => Some(&mut self.imports),
+            Tab::Strings => Some(&mut self.strings),
+            Tab::Iocs | Tab::Explain => None,
+        }
+    }
+
+    /// The main list of `tab`, if it has one.
+    pub fn list(&self, tab: Tab) -> Option<&ListState> {
+        match tab {
+            Tab::Findings => Some(&self.findings),
+            Tab::Sections => Some(&self.sections),
+            Tab::Imports => Some(&self.imports),
+            Tab::Strings => Some(&self.strings),
+            Tab::Iocs | Tab::Explain => None,
+        }
+    }
+}
+
 /// Whole TUI state.
 #[derive(Debug, Clone)]
 pub struct App {
@@ -92,6 +149,12 @@ pub struct App {
     pub help: bool,
     /// Ticks seen, for the spinner.
     pub ticks: u64,
+    /// List cursors.
+    pub panes: Panes,
+    /// Where `Backspace` goes.
+    pub history: History,
+    /// One-line message for the status bar, cleared by the next key.
+    pub status: Option<String>,
 }
 
 impl App {
@@ -104,7 +167,16 @@ impl App {
             size,
             help: false,
             ticks: 0,
+            panes: Panes::default(),
+            history: History::default(),
+            status: None,
         }
+    }
+
+    /// Rows available to the main list of a tab (body minus its borders).
+    pub fn list_rows(&self) -> usize {
+        // Header, tab bar and status line, plus the pane's two borders.
+        usize::from(self.size.1.saturating_sub(5)).max(1)
     }
 
     /// The report, once the analysis has finished.

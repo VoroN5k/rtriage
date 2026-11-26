@@ -1,6 +1,7 @@
 //! Drawing. Reads [`App`], never changes it. Every string that comes from
 //! the analysed file goes through [`rtriage_sanitize::single_line`].
 
+mod findings;
 mod help;
 mod loading;
 
@@ -176,13 +177,14 @@ fn ready(app: &App, report: &Report, frame: &mut Frame<'_>, area: Rect) {
         tabs,
     );
 
-    let block = Block::new()
-        .borders(Borders::ALL)
-        .title(format!(" {} ", app.tab.title()));
-    frame.render_widget(
-        Paragraph::new(placeholder(app.tab, report)).block(block),
-        body,
-    );
+    if app.tab == Tab::Findings {
+        findings::draw(app, report, frame, body);
+    } else {
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .title(format!(" {} ", app.tab.title()));
+        frame.render_widget(Paragraph::new(placeholder(app)).block(block), body);
+    }
 
     let mut status_spans = Vec::new();
     if is_partial(report) {
@@ -191,17 +193,48 @@ fn ready(app: &App, report: &Report, frame: &mut Frame<'_>, area: Rect) {
             Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
         ));
     }
-    status_spans.push(Span::styled(
-        " ? help · Tab/1-6 tabs · q quit",
-        Style::new().add_modifier(Modifier::DIM),
-    ));
+    match &app.status {
+        // Status notes are built from sanitized text only.
+        Some(note) => status_spans.push(Span::styled(
+            format!(" {note}"),
+            Style::new().add_modifier(Modifier::BOLD),
+        )),
+        None => status_spans.push(Span::styled(
+            " ? help · Tab/1-6 tabs · Backspace back · q quit",
+            Style::new().add_modifier(Modifier::DIM),
+        )),
+    }
     frame.render_widget(Line::from(status_spans), status);
 }
 
 /// Body text until each tab gets its own view (later M5 steps).
-fn placeholder(tab: Tab, report: &Report) -> String {
-    match tab {
-        Tab::Findings => format!("{} findings", report.findings.len()),
-        _ => "(coming in a later step)".to_owned(),
+fn placeholder(app: &App) -> String {
+    let row = app
+        .panes
+        .list(app.tab)
+        .and_then(|l| {
+            l.selected()
+                .map(|r| format!(" · row {} of {}", r + 1, l.len()))
+        })
+        .unwrap_or_default();
+    format!("(coming in a later step){row}")
+}
+
+/// The snake_case name serde uses for a unit enum variant, from its `Debug`
+/// form (`CredentialAccess` → `credential_access`), so the TUI and the JSON
+/// output agree.
+pub(crate) fn snake<T: std::fmt::Debug>(value: &T) -> String {
+    let debug = format!("{value:?}");
+    let mut out = String::with_capacity(debug.len() + 4);
+    for (i, c) in debug.chars().enumerate() {
+        if c.is_ascii_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
     }
+    out
 }

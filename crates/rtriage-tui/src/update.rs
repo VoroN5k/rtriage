@@ -3,7 +3,10 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{App, Phase, Tab};
+use crate::app::{App, Focus, Panes, Phase, Tab};
+use crate::jump::{self, Location, Target};
+use crate::list::ListState;
+use crate::model;
 use crate::msg::{Cmd, Msg};
 
 /// Applies `msg` to `app` and returns the effects to perform, in order.
@@ -19,7 +22,15 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
             Vec::new()
         }
         Msg::AnalysisDone(report) => {
+            app.panes = Panes {
+                findings: ListState::new(report.findings.len()),
+                sections: ListState::new(model::section_count(&report)),
+                imports: ListState::new(model::import_rows(&report).len()),
+                strings: ListState::new(model::string_count(&report)),
+                ..Panes::default()
+            };
             app.phase = Phase::Ready(report);
+            finding_changed(app);
             Vec::new()
         }
         Msg::AnalysisFailed => {
@@ -30,6 +41,7 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
 }
 
 fn on_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
+    app.status = None;
     let ctrl_c = key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
     if ctrl_c || key.code == KeyCode::Char('q') {
         return quit(app);
@@ -51,9 +63,165 @@ fn on_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
                 app.tab = *tab;
             }
         }
-        _ => {}
+        KeyCode::Backspace => back(app),
+        KeyCode::Left if key.modifiers.contains(KeyModifiers::ALT) => back(app),
+        code => navigate(app, code),
     }
     Vec::new()
+}
+
+/// Cursor movement for `code` (the `usize` is the page height); `None` if
+/// `code` is not a movement key.
+fn movement(code: KeyCode) -> Option<fn(&mut ListState, usize)> {
+    Some(match code {
+        KeyCode::Up | KeyCode::Char('k') => |l, _| l.move_by(-1),
+        KeyCode::Down | KeyCode::Char('j') => |l, _| l.move_by(1),
+        KeyCode::PageUp => |l, p| l.move_by(-p.cast_signed()),
+        KeyCode::PageDown => |l, p| l.move_by(p.cast_signed()),
+        KeyCode::Home => |l, _| l.home(),
+        KeyCode::End => |l, _| l.end(),
+        _ => return None,
+    })
+}
+
+/// Keys inside the current tab.
+fn navigate(app: &mut App, code: KeyCode) {
+    let rows = app.list_rows();
+    if app.tab == Tab::Findings {
+        findings_key(app, code, rows);
+    } else if let (Some(step), Some(list)) = (movement(code), app.panes.list_mut(app.tab)) {
+        step(list, rows);
+        list.follow(rows);
+    }
+}
+
+fn findings_key(app: &mut App, code: KeyCode, rows: usize) {
+    let p = &mut app.panes;
+    match code {
+        KeyCode::Left | KeyCode::Char('h') => p.focus = Focus::List,
+        KeyCode::Right | KeyCode::Char('l') => focus_evidence(p),
+        KeyCode::Enter if p.focus == Focus::List => focus_evidence(p),
+        KeyCode::Enter => jump_to_evidence(app),
+        code => {
+            let Some(step) = movement(code) else {
+                return;
+            };
+            match p.focus {
+                Focus::List => {
+                    let before = p.findings.selected();
+                    step(&mut p.findings, rows);
+                    p.findings.follow(rows);
+                    if p.findings.selected() != before {
+                        finding_changed(app);
+                    }
+                }
+                Focus::Evidence => {
+                    step(&mut p.evidence, rows);
+                    evidence_changed(app);
+                }
+            }
+        }
+    }
+}
+
+fn focus_evidence(p: &mut Panes) {
+    if !p.evidence.is_empty() {
+        p.focus = Focus::Evidence;
+    }
+}
+
+/// A new finding is selected: fresh evidence list.
+fn finding_changed(app: &mut App) {
+    let len = app
+        .report()
+        .zip(app.panes.findings.selected())
+        .and_then(|(r, i)| r.findings.get(i))
+        .map_or(0, |f| f.evidence.len());
+    app.panes.evidence = ListState::new(len);
+    if len == 0 {
+        app.panes.focus = Focus::List;
+    }
+    evidence_changed(app);
+}
+
+/// Recomputes the byte-range details for the selected evidence item.
+fn evidence_changed(app: &mut App) {
+    let range = selected_target(app).and_then(|t| match t {
+        Target::Range { offset, len } => {
+            let report = app.report()?;
+            Some(jump::range_info(&app.input, report, offset, len))
+        }
+        _ => None,
+    });
+    app.panes.range = range;
+}
+
+fn selected_target(app: &App) -> Option<Target> {
+    let report = app.report()?;
+    let finding = report.findings.get(app.panes.findings.selected()?)?;
+    jump::target(finding.evidence.get(app.panes.evidence.selected()?)?)
+}
+
+fn jump_to_evidence(app: &mut App) {
+    let Some(report) = app.report() else {
+        return;
+    };
+    let Some(target) = selected_target(app) else {
+        app.status = Some("this evidence is a value, there is nothing to jump to".into());
+        return;
+    };
+    match jump::resolve(report, &target) {
+        Ok((tab, row)) => {
+            let here = location(app);
+            let rows = app.list_rows();
+            if let Some(list) = app.panes.list_mut(tab) {
+                list.select(row);
+                list.follow(rows);
+            }
+            app.history.push(here);
+            app.tab = tab;
+        }
+        Err(why) => app.status = Some(format!("cannot jump: {why}")),
+    }
+}
+
+/// Where the user is now, to come back to.
+fn location(app: &App) -> Location {
+    Location {
+        tab: app.tab,
+        row: app.panes.list(app.tab).and_then(ListState::selected),
+        evidence: app.panes.evidence.selected(),
+        focus: app.panes.focus,
+    }
+}
+
+fn back(app: &mut App) {
+    let Some(loc) = app.history.pop() else {
+        app.status = Some("nothing to go back to".into());
+        return;
+    };
+    let rows = app.list_rows();
+    app.tab = loc.tab;
+    if let (Some(list), Some(row)) = (app.panes.list_mut(loc.tab), loc.row) {
+        list.select(row);
+        list.follow(rows);
+    }
+    if loc.tab == Tab::Findings {
+        finding_changed(app);
+        if let Some(e) = loc.evidence {
+            app.panes.evidence.select(e);
+        }
+        app.panes.focus = loc.focus;
+        focus_evidence_if(app, loc.focus);
+        evidence_changed(app);
+    }
+}
+
+/// Restores a saved focus without focusing an empty evidence list.
+fn focus_evidence_if(app: &mut App, focus: Focus) {
+    if focus == Focus::Evidence && app.panes.evidence.is_empty() {
+        app.panes.focus = Focus::List;
+    }
 }
 
 /// Cancels a running analysis (once), then quits.
@@ -235,5 +403,229 @@ mod tests {
         assert_eq!(a.tab, Tab::Iocs);
         update(&mut a, Msg::Resize(40, 10));
         assert_eq!(update(&mut a, key(KeyCode::Char('q'))), [Cmd::Quit]);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod findings_tests {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use rtriage_core::Evidence;
+
+    use super::*;
+    use crate::app::{Focus, Tab};
+    use crate::testkit::{key, ready_app, suspicious_pe};
+
+    fn app() -> App {
+        ready_app("s.exe", suspicious_pe(), (100, 30))
+    }
+
+    /// Selects the first finding with id `id` and the first evidence item
+    /// matching `pick`, with the evidence pane focused.
+    fn select(app: &mut App, id: &str, pick: fn(&Evidence) -> bool) {
+        let r = app.report().unwrap();
+        let f = r.findings.iter().position(|f| f.id == id).unwrap();
+        let e = r.findings[f].evidence.iter().position(pick).unwrap();
+        update(app, key(KeyCode::Home));
+        for _ in 0..f {
+            update(app, key(KeyCode::Down));
+        }
+        update(app, key(KeyCode::Right));
+        for _ in 0..e {
+            update(app, key(KeyCode::Down));
+        }
+        assert_eq!(app.panes.focus, Focus::Evidence);
+        assert_eq!(app.panes.evidence.selected(), Some(e));
+    }
+
+    #[test]
+    fn lists_are_sized_when_the_report_arrives() {
+        let a = app();
+        let r = a.report().unwrap();
+        assert_eq!(a.panes.findings.len(), r.findings.len());
+        assert_eq!(a.panes.evidence.len(), r.findings[0].evidence.len());
+        assert_eq!(
+            a.panes.sections.len(),
+            4,
+            ".text .evil .data + import section"
+        );
+        assert_eq!(a.panes.imports.len(), 6);
+        assert!(!a.panes.strings.is_empty());
+    }
+
+    #[test]
+    fn moving_in_the_list_resets_the_evidence_cursor() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Right));
+        update(&mut a, key(KeyCode::Down));
+        assert_eq!(a.panes.evidence.selected(), Some(1));
+        update(&mut a, key(KeyCode::Left));
+        update(&mut a, key(KeyCode::Char('j')));
+        assert_eq!(a.panes.findings.selected(), Some(1));
+        assert_eq!(a.panes.evidence.selected(), Some(0));
+        let n = a.report().unwrap().findings[1].evidence.len();
+        assert_eq!(a.panes.evidence.len(), n);
+    }
+
+    #[test]
+    fn enter_on_the_list_focuses_evidence() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Enter));
+        assert_eq!(a.panes.focus, Focus::Evidence);
+    }
+
+    #[test]
+    fn enter_on_section_evidence_jumps_and_backspace_returns() {
+        let mut a = app();
+        select(&mut a, "PE-SECTION-RWX", |e| {
+            matches!(e, Evidence::Section { .. })
+        });
+        let from_finding = a.panes.findings.selected();
+        assert!(update(&mut a, key(KeyCode::Enter)).is_empty());
+        assert_eq!(a.tab, Tab::Sections);
+        assert_eq!(a.panes.sections.selected(), Some(1), "section #1 .evil");
+        assert_eq!(a.history.len(), 1);
+
+        update(&mut a, key(KeyCode::Backspace));
+        assert_eq!(a.tab, Tab::Findings);
+        assert_eq!(a.panes.findings.selected(), from_finding);
+        assert_eq!(a.panes.evidence.selected(), Some(0));
+        assert_eq!(a.panes.focus, Focus::Evidence);
+        assert!(a.history.is_empty());
+    }
+
+    #[test]
+    fn alt_left_goes_back_too() {
+        let mut a = app();
+        select(&mut a, "PE-SECTION-RWX", |e| {
+            matches!(e, Evidence::Section { .. })
+        });
+        update(&mut a, key(KeyCode::Enter));
+        update(
+            &mut a,
+            Msg::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::ALT)),
+        );
+        assert_eq!(a.tab, Tab::Findings);
+    }
+
+    #[test]
+    fn jump_to_import_selects_symbol() {
+        let mut a = app();
+        select(
+            &mut a,
+            "PE-API-INJECTION",
+            |e| matches!(e, Evidence::Import { symbol, .. } if symbol == "WriteProcessMemory"),
+        );
+        update(&mut a, key(KeyCode::Enter));
+        assert_eq!(a.tab, Tab::Imports);
+        assert_eq!(a.panes.imports.selected(), Some(2));
+    }
+
+    #[test]
+    fn jump_to_string_selects_it() {
+        let mut a = app();
+        select(&mut a, "PE-API-NETWORK", |e| {
+            matches!(e, Evidence::String { .. })
+        });
+        update(&mut a, key(KeyCode::Enter));
+        assert_eq!(a.tab, Tab::Strings);
+        let row = a.panes.strings.selected().unwrap();
+        let s = &a.report().unwrap().facts.strings.as_ref().unwrap().items[row];
+        assert_eq!(s.value, "http://c2.evil-example.ru/gate.php");
+    }
+
+    #[test]
+    fn jump_to_missing_target_stays_and_notes() {
+        let mut a = app();
+        if let Phase::Ready(r) = &mut a.phase {
+            r.findings[0].evidence[0] = Evidence::Section {
+                index: 999,
+                name: "gone".into(),
+            };
+        }
+        update(&mut a, key(KeyCode::Home));
+        update(&mut a, key(KeyCode::Right));
+        update(&mut a, key(KeyCode::Enter));
+        assert_eq!(a.tab, Tab::Findings);
+        assert!(a.history.is_empty());
+        let status = a.status.clone().unwrap();
+        assert!(status.contains("section #999"), "{status}");
+        // The next key clears the note.
+        update(&mut a, key(KeyCode::Down));
+        assert_eq!(a.status, None);
+    }
+
+    #[test]
+    fn values_are_not_jump_targets() {
+        let mut a = app();
+        select(&mut a, "PE-SECTION-RWX", |e| {
+            matches!(e, Evidence::Field { .. })
+        });
+        update(&mut a, key(KeyCode::Enter));
+        assert_eq!(a.tab, Tab::Findings);
+        assert!(a.status.is_some());
+    }
+
+    #[test]
+    fn range_evidence_shows_range_details() {
+        let mut a = app();
+        select(&mut a, "PE-OVERLAY-HIGH-ENTROPY", |e| {
+            matches!(e, Evidence::Range { .. })
+        });
+        let info = a.panes.range.clone().unwrap();
+        assert_eq!((info.offset, info.len), (3072, 4096));
+        assert_eq!(info.past_eof, 0);
+        assert_eq!(info.section, None, "overlay is outside every section");
+        assert!(info.entropy.unwrap() > 7.5);
+        // Moving off the range hides it.
+        update(&mut a, key(KeyCode::Down));
+        assert_eq!(a.panes.range, None);
+    }
+
+    #[test]
+    fn empty_findings_enter_is_noop() {
+        let mut a = ready_app("t.txt", b"plain".to_vec(), (80, 24));
+        assert_eq!(a.panes.findings.len(), 0);
+        for k in [
+            KeyCode::Enter,
+            KeyCode::Right,
+            KeyCode::Enter,
+            KeyCode::Down,
+            KeyCode::End,
+        ] {
+            assert!(update(&mut a, key(k)).is_empty());
+        }
+        assert_eq!(a.tab, Tab::Findings);
+        assert_eq!(a.panes.focus, Focus::List);
+    }
+
+    #[test]
+    fn back_with_empty_history_notes() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Backspace));
+        assert!(a.status.clone().unwrap().contains("nothing to go back to"));
+    }
+
+    #[test]
+    fn page_keys_move_by_a_screen() {
+        let mut a = ready_app("s.exe", suspicious_pe(), (80, 16));
+        update(&mut a, key(KeyCode::PageDown));
+        let rows = a.list_rows();
+        let n = a.panes.findings.len();
+        assert_eq!(a.panes.findings.selected(), Some(rows.min(n - 1)));
+        update(&mut a, key(KeyCode::End));
+        assert_eq!(a.panes.findings.selected(), Some(n - 1));
+        update(&mut a, key(KeyCode::PageUp));
+        update(&mut a, key(KeyCode::PageUp));
+        assert_eq!(a.panes.findings.selected(), Some(0));
+    }
+
+    #[test]
+    fn other_tabs_move_their_own_cursor() {
+        let mut a = app();
+        update(&mut a, key(KeyCode::Char('3')));
+        update(&mut a, key(KeyCode::Down));
+        assert_eq!(a.panes.imports.selected(), Some(1));
+        assert_eq!(a.panes.findings.selected(), Some(0));
     }
 }

@@ -10,12 +10,19 @@
 #![forbid(unsafe_code)]
 
 mod app;
+mod jump;
+mod list;
+mod model;
 mod msg;
 mod runtime;
+#[cfg(test)]
+mod testkit;
 mod update;
 mod view;
 
-pub use app::{is_partial, App, Phase, Tab, MIN_SIZE};
+pub use app::{is_partial, App, Focus, Panes, Phase, Tab, MIN_SIZE};
+pub use jump::{History, Location, RangeInfo, Target, RANGE_ENTROPY_CAP};
+pub use list::ListState;
 pub use msg::{from_event, Cmd, Msg};
 pub use runtime::{run, TuiError, TuiOptions};
 pub use update::update;
