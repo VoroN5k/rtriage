@@ -17,9 +17,17 @@ env:
   CARGO_TERM_COLOR: always
 
 # Third-party actions are pinned to full commit SHAs (tag in the comment).
+#
+# Every check runs twice: with the default features (what `cargo build`
+# gives users) and with all features (`yara`, plus `test-hooks`, which the
+# worker-isolation tests need and release builds never enable).
 jobs:
   lint:
-    name: fmt, clippy, docs
+    name: fmt, clippy, docs (${{ matrix.features }})
+    strategy:
+      fail-fast: false
+      matrix:
+        features: [default, all]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -28,21 +36,27 @@ jobs:
       # Installs the toolchain and components pinned in rust-toolchain.toml.
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: features-${{ matrix.features }}
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - run: cargo doc --workspace --no-deps --locked
+        if: matrix.features == 'default'
+      - run: cargo clippy --workspace --all-targets --locked ${{ matrix.features == 'all' && '--all-features' || '' }} -- -D warnings
+      - run: cargo doc --workspace --no-deps --locked ${{ matrix.features == 'all' && '--all-features' || '' }}
         env:
           RUSTDOCFLAGS: -D warnings
       # Fuzz targets live outside the workspace; keep them compiling (stable is enough to check).
       - run: cargo fmt --manifest-path fuzz/Cargo.toml --check
+        if: matrix.features == 'default'
       - run: cargo check --manifest-path fuzz/Cargo.toml --locked
+        if: matrix.features == 'default'
 
   test:
-    name: test (${{ matrix.os }})
+    name: test (${{ matrix.os }}, ${{ matrix.features }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+        features: [default, all]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -50,5 +64,7 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: features-${{ matrix.features }}
       # insta detects CI and fails on snapshot mismatches instead of writing them.
-      - run: cargo test --workspace --all-features --locked
+      - run: cargo test --workspace --locked ${{ matrix.features == 'all' && '--all-features' || '' }}

@@ -122,6 +122,11 @@ The CLI exposes `--timeout <SECONDS>` (default 30, `0` is rejected).
   chains without an end bit.
 - **Fuzzing** (nightly, weekly in CI): `pe_parse`, `elf_parse`, `strings`;
   see `fuzz/README.md`.
+- **CI** (`.github/workflows/ci.yml`): clippy, docs and the whole test suite
+  run twice, with default features and with all features (`yara`,
+  `test-hooks`), on Linux, Windows and macOS. Weekly (`fuzz.yml`): the
+  fuzz targets plus the PE, ELF and YARA property tests with 100 000 cases
+  each in release mode.
 
 ## 6. Process isolation (M4)
 

@@ -1,6 +1,6 @@
 [package]
 name = "rtriage-cli"
-description = "Command-line interface for rtriage"
+description = "Fast static malware triage for PE and ELF binaries; never executes what it analyzes"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

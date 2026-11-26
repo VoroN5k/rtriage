@@ -72,13 +72,15 @@ pub struct Cli {
 
     /// Directory with your own rules, layered over the bundled ones. Known files:
     /// api_groups.toml, elf_api_groups.toml, packers.toml (replace the bundled
-    /// ones unless they set include_defaults = true) and ioc_allowlist.toml
-    /// (always added). Missing files fall back to the bundled rules.
+    /// ones unless they set include_defaults = true), ioc_allowlist.toml (always
+    /// added), yara.toml (YARA settings and limits) and a yara/ directory of
+    /// rule files (added). Missing files fall back to the bundled rules.
     #[arg(long, value_name = "DIR", global = true)]
     pub rules_dir: Option<PathBuf>,
 
     /// Extra YARA rules: a rule file, or a directory searched for *.yar / *.yara
-    /// (repeatable). Added to the bundled rules and `<rules-dir>/yara/`.
+    /// (repeatable). Added to the bundled rules and `<rules-dir>/yara/`. Needs a
+    /// build with the `yara` feature.
     #[arg(long, value_name = "PATH", global = true, action = ArgAction::Append, conflicts_with = "no_yara")]
     pub yara: Vec<PathBuf>,
 

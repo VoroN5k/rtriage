@@ -45,3 +45,19 @@ jobs:
         with:
           name: crash-${{ matrix.target }}
           path: fuzz/artifacts/${{ matrix.target }}
+
+  proptest:
+    name: proptest (100k cases, release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      # The same property tests as every push, with far more cases, including
+      # mutated PE/ELF driven through yara-x's own pe and elf modules.
+      - run: >
+          cargo test -p rtriage-core --release --all-features --locked
+          --test robustness_pe --test robustness_elf --test robustness_yara
+        env:
+          PROPTEST_CASES: "100000"
