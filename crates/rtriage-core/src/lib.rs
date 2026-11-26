@@ -31,6 +31,7 @@ pub mod scoring;
 pub mod walk;
 #[cfg(feature = "yara")]
 pub mod yara;
+pub mod yara_sources;
 
 pub use analyzers::{AnalysisContext, Analyzer, Registry};
 pub use config::{Config, Thresholds};

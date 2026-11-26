@@ -17,7 +17,7 @@ use rtriage_core::report::{
     EntropyFacts, ExtractedString, PeImportsFacts, PeSectionFacts, StringEncoding, StringKind,
     StringsFacts,
 };
-use rtriage_core::report::{Ioc, IocFacts, IocKind};
+use rtriage_core::report::{Ioc, IocFacts, IocKind, YaraFacts};
 use rtriage_core::{
     Evidence, Finding, Format, PeFacts, PeHeaderFacts, Report, Risk, RiskLevel, Severity,
 };
@@ -113,6 +113,9 @@ fn render_report(
     }
     if let Some(e) = &r.facts.entropy {
         render_entropy(e, out, p)?;
+    }
+    if let Some(y) = &r.facts.yara {
+        render_yara(y, out, p)?;
     }
     if let Some(i) = &r.facts.iocs {
         render_iocs(i, out, p)?;
@@ -305,6 +308,36 @@ fn render_entropy(e: &EntropyFacts, out: &mut dyn Write, p: &Painter) -> io::Res
             r.offset.saturating_add(r.len),
             short_size(r.len),
             r.entropy
+        )?;
+    }
+    Ok(())
+}
+
+fn render_yara(y: &YaraFacts, out: &mut dyn Write, p: &Painter) -> io::Result<()> {
+    writeln!(
+        out,
+        "\n{}  {} rule(s) loaded, {} matched{}",
+        p.heading("YARA"),
+        group_digits(y.rules_loaded as u64),
+        y.matches.len(),
+        if y.limit_reached {
+            " (limit reached)"
+        } else {
+            ""
+        }
+    )?;
+    for m in &y.matches {
+        let tags = if m.tags.is_empty() {
+            String::new()
+        } else {
+            format!("  [{}]", sanitize(&m.tags.join(", ")))
+        };
+        writeln!(
+            out,
+            "  {}:{}{tags}  {} string match(es)",
+            sanitize(&m.namespace),
+            sanitize(&m.rule),
+            m.strings.len()
         )?;
     }
     Ok(())

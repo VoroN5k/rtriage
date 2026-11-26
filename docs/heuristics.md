@@ -879,6 +879,8 @@ file names are read; each is optional and falls back to the bundled one:
 | `elf_api_groups.toml` | ELF groups: same rules, `ELF-API-` IDs |
 | `packers.toml` | Packer / runtime explanations: same (entries keyed by name + format / name) |
 | `ioc_allowlist.toml` | Domains **added** to the bundled allowlist |
+| `yara.toml` | YARA settings: `include_bundled` (default true) and `[limits]` `max_files` (1000), `max_total_size` (16 MiB), `max_matches` (256), `max_pattern_matches` (1000), `max_strings_per_rule` (16); each bounded by a hard ceiling |
+| `yara/` | Directory of YARA rule files (`*.yar`, `*.yara`, walked sorted, symlinks not followed); **added** to the bundled rules |
 
 Limits are those of the bundled data, per file and for merged sets (1 MiB
 per file, checked before reading; 256 groups; 10 000 allowlist domains).
@@ -918,7 +920,22 @@ rules apply.
   most `max_yara_pattern_matches` (1000) matches per pattern and
   `max_yara_matches` (256) matching rules kept per file. The scan runs under
   `catch_unwind`.
-- **False positives** are the rule author's: rtriage reports which rule
+- **Sources**, in order, each file its own namespace (its file stem, made
+  unique): the bundled first-party rules (namespace `rtriage`) unless
+  `yara.toml` sets `include_bundled = false`; `<rules-dir>/yara/`; every
+  `--yara <PATH>` (repeatable; a file, or a directory walked for `*.yar` /
+  `*.yara`). `--no-yara` turns YARA off entirely and conflicts with
+  `--yara`. Load limits are checked from file metadata before anything is
+  read. A build without the `yara` feature exits with a usage error when
+  rules are given (`--yara` or `<rules-dir>/yara/`) instead of ignoring
+  them; `--no-yara` makes such a rules directory usable.
+- **Bundled rules** (`rules/yara/`): `eicar_test_file` (Info, `metadata`,
+  0 points; the EICAR string is split in two patterns so neither the rule
+  file nor the rtriage binary contains it whole) and `embedded_pe_dos_stub`
+  (Low/Low, `anomaly`, T1027.009: a second DOS stub text inside a PE, or one
+  anywhere after the start of another file).
+- **Compiled once.** The parent compiles every source once; workers receive
+  the serialized rule set over their stdin before their first request.- **False positives** are the rule author's: rtriage reports which rule
   matched and where, and scores it like any other finding.
 
 ### Facts that suppress heuristics

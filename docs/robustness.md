@@ -132,11 +132,12 @@ in a **worker process**; a single file runs in-process (cooperative deadline
 and limits apply there). See `output-schema.md`, "Which mode runs".
 
 **Worker mode** (`rtriage --worker`, hidden; `crates/rtriage-cli/src/worker.rs`).
-Protocol version 1, one JSON object per line:
+Protocol version 2, one JSON object per line (v2 added the rules preamble):
 
 | Direction | Message |
 |---|---|
-| worker → parent, once | `{"type":"ready","protocol":1}` |
+| parent → worker, first (only with `--worker-yara`) | `{"type":"rules","len":N}` followed by exactly N bytes of serialized YARA rules (N ≤ 256 MiB); the worker answers `ready` only after installing them |
+| worker → parent, once | `{"type":"ready","protocol":2}` |
 | parent → worker | `{"id":N,"path":{"utf8":"..."}}`; non-UTF-8 paths travel losslessly as `{"unix":[bytes]}` or `{"windows":[u16 units]}` |
 | worker → parent | `{"type":"report","id":N,"summary":{...},"body":"..."}` or `{"type":"failure","id":N,"error":"..."}` |
 | parent closes stdin | worker exits with code 0 |
@@ -153,6 +154,10 @@ Protocol version 1, one JSON object per line:
   (default 64 MiB). An oversized or malformed response means the worker is
   misbehaving: it is killed and the file is reported as failed.
 - A malformed request ends the worker with exit code 2 (protocol error).
+  So does a missing, malformed, oversized or truncated rules preamble.
+- The parent writes to each worker from a dedicated **writer thread** too
+  (rules blob, then requests from a channel), so a worker that stops reading
+  can never block the pool; killing the worker unblocks the writer.
 - Workers start with a **cleared environment** (only what the platform
   needs, e.g. `SystemRoot` on Windows) and receive paths over stdin, never
   file contents.
@@ -185,5 +190,5 @@ Protocol version 1, one JSON object per line:
   Linux.
 
 Platform memory caps (Job Objects, `setrlimit`) remain a possible follow-up
-outside the core crate. Serialized YARA rules for workers come with YARA
-(M4 steps 5 and 6).
+outside the core crate. YARA rules are compiled once by the parent and sent
+to every worker in the rules preamble (above).

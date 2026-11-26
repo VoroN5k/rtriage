@@ -27,16 +27,7 @@ use std::fmt;
 use crate::report::{Category, Confidence, RiskLevel, Severity};
 use crate::rules::{intern, is_attack_id};
 
-/// One rule source to compile.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct YaraSource {
-    /// Shown in errors (usually the file path).
-    pub origin: String,
-    /// Namespace of its rules (one per file keeps equal rule names apart).
-    pub namespace: String,
-    /// Rule text.
-    pub text: String,
-}
+pub use crate::yara_sources::YaraSource;
 
 /// Why a rule set could not be built or loaded.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -360,6 +351,16 @@ mod tests {
         assert_eq!(back.len(), 1);
         assert_eq!(back.meta("test", "a").severity, Severity::Low);
         assert!(YaraRules::deserialize(b"not rules").is_err());
+    }
+
+    #[test]
+    fn bundled_rules_compile() {
+        let r = YaraRules::compile(&crate::yara_sources::bundled_sources()).unwrap();
+        assert_eq!(r.len(), 2);
+        assert_eq!(
+            r.meta("rtriage", "eicar_test_file").severity,
+            Severity::Info
+        );
     }
 
     #[test]

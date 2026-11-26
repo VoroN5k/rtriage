@@ -10,14 +10,15 @@ mod worker;
 
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anstream::{AutoStream, ColorChoice};
 use anyhow::Context;
 use clap::Parser;
-use rtriage_core::rules_dir::{RulesDir, KNOWN_FILES};
+use rtriage_core::rules_dir::{RulesDir, KNOWN_FILES, YARA_DIR};
 use rtriage_core::walk::{self, WalkOptions};
+use rtriage_core::yara_sources::YaraLoadLimits;
 use rtriage_core::{Config, Registry, RiskLevel};
 use tracing::level_filters::LevelFilter;
 
@@ -38,15 +39,20 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     install_panic_hook();
     init_logging(&cli);
-    let config = match build_config(&cli) {
-        Ok(config) => config,
+    let (mut config, plan) = match build_config(&cli) {
+        Ok(setup) => setup,
         Err(err) => {
             eprintln!("error: {}", sanitize(&format!("{err:#}")));
             return ExitCode::from(EXIT_USAGE);
         }
     };
     if cli.worker {
-        return worker::run_worker(&cli, &config);
+        // Workers get compiled YARA rules from the parent, never from disk.
+        return worker::run_worker(&cli, config);
+    }
+    if let Err(err) = setup_yara(&cli, &plan, &mut config) {
+        eprintln!("error: {}", sanitize(&format!("{err:#}")));
+        return ExitCode::from(EXIT_USAGE);
     }
     match run(&cli, &config) {
         Ok(code) => code,
@@ -94,11 +100,11 @@ fn run(cli: &Cli, config: &Config) -> anyhow::Result<ExitCode> {
         .collect();
 
     let gate = if let Some(scan) = scan {
-        modes::scan(cli, scan, &walk.files, &mut failures, &skipped)?
+        modes::scan(cli, config, scan, &walk.files, &mut failures, &skipped)?
     } else if let ([single], false) = (walk.files.as_slice(), walk.walked_directories) {
         in_process(cli, config, single, &mut failures, skipped)?
     } else {
-        modes::full_reports(cli, &walk.files, &mut failures, &skipped)?
+        modes::full_reports(cli, config, &walk.files, &mut failures, &skipped)?
     };
 
     let fail_on = cli.fail_on.map(RiskLevel::from);
@@ -207,7 +213,18 @@ fn exit_warnings(failures: &[Failure], partial: usize, code: u8) -> Vec<String> 
     }
     out
 }
-fn build_config(cli: &Cli) -> anyhow::Result<Config> {
+/// Where this run's YARA rules come from (used by the parent only).
+#[derive(Debug, Clone)]
+pub(crate) struct YaraPlan {
+    /// Compile the bundled rules (`yara.toml` `include_bundled`).
+    include_bundled: bool,
+    /// Loading bounds from `yara.toml`.
+    load: YaraLoadLimits,
+    /// `<rules-dir>/yara/`, then every `--yara`.
+    paths: Vec<PathBuf>,
+}
+
+fn build_config(cli: &Cli) -> anyhow::Result<(Config, YaraPlan)> {
     let mut config = Config {
         strings_min_len: cli.strings_min,
         ..Config::default()
@@ -216,13 +233,19 @@ fn build_config(cli: &Cli) -> anyhow::Result<Config> {
         config.limits.max_file_size = max;
     }
     config.limits.max_analysis_time = std::time::Duration::from_secs(cli.timeout.get());
+    let mut plan = YaraPlan {
+        include_bundled: true,
+        load: YaraLoadLimits::default(),
+        paths: Vec::new(),
+    };
     if let Some(dir) = &cli.rules_dir {
         let rules = RulesDir::load(dir).context("cannot load rules")?;
-        if rules.loaded.is_empty() {
+        if rules.loaded.is_empty() && rules.yara_dir.is_none() {
             eprintln!(
-                "warning: {}: no known rules files ({}); using the bundled rules",
+                "warning: {}: no known rules files ({}) and no {}/ directory; using the bundled rules",
                 sanitize(&dir.to_string_lossy()),
-                KNOWN_FILES.join(", ")
+                KNOWN_FILES.join(", "),
+                YARA_DIR
             );
         }
         for name in &rules.ignored {
@@ -233,11 +256,67 @@ fn build_config(cli: &Cli) -> anyhow::Result<Config> {
             );
         }
         tracing::info!(loaded = ?rules.loaded, "rules directory");
+        if let Some(s) = rules.yara_settings {
+            plan.include_bundled = s.include_bundled;
+            plan.load = s.load;
+        }
+        if let Some(d) = &rules.yara_dir {
+            plan.paths.push(d.clone());
+        }
         rules.apply(&mut config);
     }
-    Ok(config)
+    plan.paths.extend(cli.yara.iter().cloned());
+    Ok((config, plan))
 }
 
+/// Compiles this run's YARA rules into `config` (bundled, `<rules-dir>/yara/`,
+/// `--yara`), once, in the parent.
+#[cfg(feature = "yara")]
+fn setup_yara(cli: &Cli, plan: &YaraPlan, config: &mut Config) -> anyhow::Result<()> {
+    if cli.no_yara {
+        return Ok(());
+    }
+    let mut sources = if plan.include_bundled {
+        rtriage_core::yara_sources::bundled_sources()
+    } else {
+        Vec::new()
+    };
+    sources.extend(
+        rtriage_core::yara_sources::load_sources(&plan.paths, plan.load)
+            .context("cannot load YARA rules")?,
+    );
+    if sources.is_empty() {
+        return Ok(());
+    }
+    let rules =
+        rtriage_core::yara::YaraRules::compile(&sources).context("cannot compile YARA rules")?;
+    tracing::info!(
+        rules = rules.len(),
+        files = sources.len(),
+        "YARA rules compiled"
+    );
+    config.yara = Some(std::sync::Arc::new(rules));
+    Ok(())
+}
+
+/// Without the `yara` feature, user rules cannot run: say so instead of
+/// silently ignoring them.
+#[cfg(not(feature = "yara"))]
+fn setup_yara(cli: &Cli, plan: &YaraPlan, _config: &mut Config) -> anyhow::Result<()> {
+    if cli.no_yara || plan.paths.is_empty() {
+        return Ok(());
+    }
+    let given: Vec<String> = plan
+        .paths
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    anyhow::bail!(
+        "YARA rules were given ({}), but this rtriage was built without YARA support \
+         (cargo feature `yara`); pass --no-yara to run without them",
+        given.join(", ")
+    )
+}
 /// Loads and analyzes one file. Directories get a dedicated message.
 fn triage(
     path: &Path,

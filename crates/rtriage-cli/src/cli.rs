@@ -77,6 +77,15 @@ pub struct Cli {
     #[arg(long, value_name = "DIR", global = true)]
     pub rules_dir: Option<PathBuf>,
 
+    /// Extra YARA rules: a rule file, or a directory searched for *.yar / *.yara
+    /// (repeatable). Added to the bundled rules and `<rules-dir>/yara/`.
+    #[arg(long, value_name = "PATH", global = true, action = ArgAction::Append, conflicts_with = "no_yara")]
+    pub yara: Vec<PathBuf>,
+
+    /// Do not run YARA at all (not even the bundled rules).
+    #[arg(long, global = true)]
+    pub no_yara: bool,
+
     /// Hard time limit per file, in seconds (must be > 0). When it expires the
     /// remaining analyzers are skipped and the report is marked partial.
     #[arg(long, value_name = "SECONDS", default_value = "30", global = true)]
@@ -107,6 +116,10 @@ pub struct Cli {
     /// Internal: a worker renders JSON bodies on one line (for NDJSON).
     #[arg(long, hide = true)]
     pub worker_compact: bool,
+
+    /// Internal: the parent sends compiled YARA rules before the first request.
+    #[arg(long, hide = true)]
+    pub worker_yara: bool,
 
     /// Internal: a worker sends summaries only, no rendered body.
     #[arg(long, hide = true)]
@@ -267,6 +280,19 @@ mod tests {
         // Plain mode is unchanged; `./scan` is a file.
         let cli = Cli::try_parse_from(["rtriage", "./scan", "b"]).unwrap();
         assert!(cli.command.is_none() && cli.files.len() == 2);
+    }
+
+    #[test]
+    fn yara_flags() {
+        let cli =
+            Cli::try_parse_from(["rtriage", "--yara", "a.yar", "--yara", "dir", "f"]).unwrap();
+        assert_eq!(cli.yara, [PathBuf::from("a.yar"), PathBuf::from("dir")]);
+        assert!(Cli::try_parse_from(["rtriage", "--yara", "a.yar", "--no-yara", "f"]).is_err());
+        assert!(
+            Cli::try_parse_from(["rtriage", "scan", "d", "--no-yara"])
+                .unwrap()
+                .no_yara
+        );
     }
 
     #[test]

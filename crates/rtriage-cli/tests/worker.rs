@@ -76,7 +76,7 @@ fn ready_then_one_response_per_request_in_order() {
     );
     let m = messages(&out);
     assert_eq!(m.len(), 3);
-    assert_eq!(m[0], serde_json::json!({ "type": "ready", "protocol": 1 }));
+    assert_eq!(m[0], serde_json::json!({ "type": "ready", "protocol": 2 }));
     assert_eq!(
         (m[1]["type"].as_str(), m[1]["id"].as_u64()),
         (Some("report"), Some(1))
@@ -218,4 +218,26 @@ fn test_hooks_crash_and_spam() {
     assert_eq!(got, buf.len(), "spam keeps writing");
     child.kill().unwrap();
     child.wait().unwrap();
+}
+
+#[test]
+fn bad_rules_preambles_end_the_worker_before_ready() {
+    let huge = format!("{{\"type\":\"rules\",\"len\":{}}}\n", (256u64 << 20) + 1);
+    for bad in [
+        &b""[..],
+        b"not json\n",
+        b"{\"type\":\"rules\"}\n",
+        huge.as_bytes(),
+        b"{\"type\":\"rules\",\"len\":100}\nshort",
+        b"{\"type\":\"rules\",\"len\":9}\nnot rules",
+    ] {
+        let out = worker(&["--worker-yara"], bad, &[]);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{}",
+            String::from_utf8_lossy(bad)
+        );
+        assert!(out.stdout.is_empty(), "no ready before rules are installed");
+    }
 }

@@ -22,6 +22,7 @@ use crate::output::{json, text, Failure, SkippedPath};
 use crate::pool::{self, Outcome, PoolOptions, GRACE};
 use crate::worker::{Spawn, Summary, DEFAULT_MAX_RESPONSE_LINE};
 use crate::{report_failure, Gate};
+use rtriage_core::Config;
 
 /// Time a new worker may take to send `ready`.
 const START_TIMEOUT: Duration = Duration::from_secs(30);
@@ -29,12 +30,13 @@ const START_TIMEOUT: Duration = Duration::from_secs(30);
 /// Every report in input order (bodies held only until their turn).
 pub fn full_reports(
     cli: &Cli,
+    config: &Config,
     files: &[PathBuf],
     failures: &mut Vec<Failure>,
     skipped: &[SkippedPath],
 ) -> anyhow::Result<Gate> {
     let (mut out, color) = open_output(cli)?;
-    let opts = pool_options(cli, worker_spawn(cli, color, WorkerBody::Full)?);
+    let opts = pool_options(cli, worker_spawn(cli, config, color, WorkerBody::Full)?);
     let mut gate = Gate::default();
     let mut order = Reorder::default();
     let mut printed = 0usize;
@@ -85,6 +87,7 @@ pub fn full_reports(
 /// The batch table (or NDJSON).
 pub fn scan(
     cli: &Cli,
+    config: &Config,
     args: &ScanArgs,
     files: &[PathBuf],
     failures: &mut Vec<Failure>,
@@ -97,7 +100,7 @@ pub fn scan(
         (true, true) => WorkerBody::Compact,
         (true, false) => WorkerBody::Full,
     };
-    let opts = pool_options(cli, worker_spawn(cli, color, body)?);
+    let opts = pool_options(cli, worker_spawn(cli, config, color, body)?);
     let mut rows: Vec<Summary> = Vec::new();
     let mut printed = 0usize;
     let result = pool::run(files, &opts, |o| {
@@ -193,7 +196,12 @@ enum WorkerBody {
 
 /// The worker command line: the run's analysis and rendering options, never
 /// the file list (paths go over stdin).
-fn worker_spawn(cli: &Cli, color: bool, body: WorkerBody) -> anyhow::Result<Spawn> {
+fn worker_spawn(
+    cli: &Cli,
+    config: &Config,
+    color: bool,
+    body: WorkerBody,
+) -> anyhow::Result<Spawn> {
     let exe = std::env::current_exe().context("cannot locate the rtriage executable")?;
     let mut args: Vec<OsString> = vec!["--worker".into()];
     let mut push = |a: &str| args.push(a.into());
@@ -232,13 +240,34 @@ fn worker_spawn(cli: &Cli, color: bool, body: WorkerBody) -> anyhow::Result<Spaw
         args.push("--rules-dir".into());
         args.push(dir.as_os_str().to_owned());
     }
+    let rules = compiled_rules(config)?;
+    if rules.is_some() {
+        args.push("--worker-yara".into());
+    }
     Ok(Spawn {
         exe,
         args,
         env: worker_env(),
         max_line: DEFAULT_MAX_RESPONSE_LINE,
         show_stderr: cli.verbose > 0,
+        rules,
     })
+}
+
+/// The run's compiled YARA rules, serialized once for every worker.
+#[cfg(feature = "yara")]
+fn compiled_rules(config: &Config) -> anyhow::Result<Option<std::sync::Arc<Vec<u8>>>> {
+    config
+        .yara
+        .as_ref()
+        .map(|r| r.serialize().map(std::sync::Arc::new))
+        .transpose()
+        .context("cannot hand YARA rules to worker processes")
+}
+
+#[cfg(not(feature = "yara"))]
+fn compiled_rules(_config: &Config) -> anyhow::Result<Option<std::sync::Arc<Vec<u8>>>> {
+    Ok(None)
 }
 
 /// The only environment a worker gets.

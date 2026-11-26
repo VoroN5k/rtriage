@@ -19,6 +19,7 @@ use std::sync::Arc;
 use crate::analyzers::iocs::IocAllowlist;
 use crate::config::Config;
 use crate::rules::{ApiRuleSet, PackerRuleSet, RuleTarget, RulesError, MAX_RULES_FILE_SIZE};
+use crate::yara_sources::YaraSettings;
 
 /// PE behavior groups.
 pub const API_RULES_FILE: &str = "api_groups.toml";
@@ -28,12 +29,17 @@ pub const ELF_API_RULES_FILE: &str = "elf_api_groups.toml";
 pub const PACKER_RULES_FILE: &str = "packers.toml";
 /// IOC allowlist additions.
 pub const IOC_ALLOWLIST_FILE: &str = "ioc_allowlist.toml";
+/// YARA settings (bundled rules on/off, limits).
+pub const YARA_SETTINGS_FILE: &str = "yara.toml";
+/// Directory of user YARA rule files.
+pub const YARA_DIR: &str = "yara";
 /// Every file name a rules directory may contain.
-pub const KNOWN_FILES: [&str; 4] = [
+pub const KNOWN_FILES: [&str; 5] = [
     API_RULES_FILE,
     ELF_API_RULES_FILE,
     PACKER_RULES_FILE,
     IOC_ALLOWLIST_FILE,
+    YARA_SETTINGS_FILE,
 ];
 /// Directory entries looked at when listing unknown files.
 const MAX_DIR_ENTRIES: usize = 1024;
@@ -82,6 +88,10 @@ pub struct RulesDir {
     pub packer_rules: Option<PackerRuleSet>,
     /// Effective allowlist, bundled plus additions (`None`: bundled).
     pub ioc_allowlist: Option<IocAllowlist>,
+    /// `yara.toml` settings (`None`: defaults).
+    pub yara_settings: Option<YaraSettings>,
+    /// `<dir>/yara/` if it exists (user rule files).
+    pub yara_dir: Option<PathBuf>,
     /// Known files that were found, in [`KNOWN_FILES`] order.
     pub loaded: Vec<&'static str>,
     /// Other `.toml` files in the directory (likely typos), sorted.
@@ -144,6 +154,14 @@ impl RulesDir {
             out.ioc_allowlist = Some(extra.merged_over(defaults).map_err(at(&path))?);
             out.loaded.push(IOC_ALLOWLIST_FILE);
         }
+        if let Some((path, text)) = read_known(dir, YARA_SETTINGS_FILE)? {
+            out.yara_settings = Some(YaraSettings::parse(&text).map_err(at(&path))?);
+            out.loaded.push(YARA_SETTINGS_FILE);
+        }
+        let yara_dir = dir.join(YARA_DIR);
+        if yara_dir.is_dir() {
+            out.yara_dir = Some(yara_dir);
+        }
         out.ignored = unknown_toml_files(dir);
         Ok(out)
     }
@@ -162,6 +180,9 @@ impl RulesDir {
         }
         if let Some(a) = self.ioc_allowlist {
             config.ioc_allowlist = Some(Arc::new(a));
+        }
+        if let Some(s) = self.yara_settings {
+            s.apply(&mut config.limits);
         }
     }
 }

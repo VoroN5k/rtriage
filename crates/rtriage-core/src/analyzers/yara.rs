@@ -212,6 +212,92 @@ mod tests {
 
     const DATA: &[u8] = b"\0\0hello world, marker-one here and marker-two there\0";
 
+    fn bundled() -> Config {
+        Config {
+            yara: Some(Arc::new(
+                YaraRules::compile(&crate::yara_sources::bundled_sources()).unwrap(),
+            )),
+            ..Config::default()
+        }
+    }
+
+    fn rules_hit(r: &Report) -> Vec<String> {
+        r.facts
+            .yara
+            .as_ref()
+            .unwrap()
+            .matches
+            .iter()
+            .map(|m| m.rule.clone())
+            .collect()
+    }
+
+    /// The EICAR test string, assembled at run time: neither this source nor
+    /// the test binary contains it in one piece, and it is never written to disk.
+    fn eicar() -> Vec<u8> {
+        let parts = [
+            "X5O!P%@AP[4\\PZX54(P^)7CC)7}$",
+            "EICAR-STANDARD-",
+            "ANTIVIRUS-TEST-FILE!$H+H*",
+        ];
+        parts.concat().into_bytes()
+    }
+
+    #[test]
+    fn bundled_eicar_is_informational() {
+        let r = analyze(&eicar(), &bundled());
+        assert_eq!(rules_hit(&r), ["eicar_test_file"]);
+        let f = yara(&r)[0];
+        assert_eq!(
+            (f.severity, f.category),
+            (Severity::Info, Category::Metadata)
+        );
+        assert_eq!(r.risk.score, 0);
+        // Not at the start, or with trailing bulk: no match.
+        let mut shifted = b"x".to_vec();
+        shifted.extend(eicar());
+        assert!(rules_hit(&analyze(&shifted, &bundled())).is_empty());
+        let mut big = eicar();
+        big.extend([b' '; 200]);
+        assert!(rules_hit(&analyze(&big, &bundled())).is_empty());
+    }
+
+    #[test]
+    fn bundled_embedded_pe() {
+        // The rule is byte-level (`MZ` at 0, count of DOS stub texts), so a
+        // PE-like blob with a real stub text is enough. (The synthetic PE
+        // fixtures carry no stub text at all.)
+        let pe_like = |n: usize| {
+            let mut v = b"MZ".to_vec();
+            v.extend([0u8; 0x3e]);
+            v.extend(b"This program cannot be run in DOS mode.\r\r\n$");
+            v.extend(vec![0u8; n]);
+            v
+        };
+        // A PE with its own single stub: no match.
+        assert!(rules_hit(&analyze(&pe_like(64), &bundled())).is_empty());
+        // A PE carrying another PE: match.
+        let mut dropper = pe_like(64);
+        dropper.extend(pe_like(64));
+        assert_eq!(
+            rules_hit(&analyze(&dropper, &bundled())),
+            ["embedded_pe_dos_stub"]
+        );
+        // Any other file carrying a PE: match; low/low anomaly.
+        let mut blob = b"\0\0zip-ish container".to_vec();
+        blob.extend(pe_like(64));
+        let r = analyze(&blob, &bundled());
+        assert_eq!(rules_hit(&r), ["embedded_pe_dos_stub"]);
+        let f = yara(&r)[0];
+        assert_eq!((f.severity, f.category), (Severity::Low, Category::Anomaly));
+        assert_eq!(f.attack, ["T1027.009"]);
+        // The stub text alone at the very start of a non-PE: no match.
+        assert!(rules_hit(&analyze(
+            b"This program cannot be run in DOS mode",
+            &bundled()
+        ))
+        .is_empty());
+    }
     #[test]
     fn no_rules_no_facts() {
         let r = analyze(DATA, &Config::default());

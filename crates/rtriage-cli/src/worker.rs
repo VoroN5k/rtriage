@@ -29,7 +29,9 @@ use crate::cli::{Cli, OutputFormat};
 use crate::output::{self, text::TextOptions, FailureKind};
 
 /// Worker protocol version, checked by the parent on `ready`.
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
+/// Largest compiled YARA rule set a worker accepts from its parent.
+pub const MAX_RULES_BLOB: usize = 256 << 20;
 /// Longest request line a worker accepts (paths only).
 pub const MAX_REQUEST_LINE: usize = 1 << 20;
 /// Default longest response line the parent accepts (one rendered report).
@@ -245,7 +247,7 @@ pub fn read_line_bounded(reader: &mut impl BufRead, limit: usize) -> io::Result<
 
 /// Runs the worker loop on stdin/stdout. Never returns an error: protocol
 /// violations end the process with [`EXIT_PROTOCOL`].
-pub fn run_worker(cli: &Cli, config: &Config) -> ExitCode {
+pub fn run_worker(cli: &Cli, mut config: Config) -> ExitCode {
     #[cfg(feature = "test-hooks")]
     test_hooks::at_start();
     let registry = Registry::default();
@@ -253,6 +255,13 @@ pub fn run_worker(cli: &Cli, config: &Config) -> ExitCode {
     let mut input = stdin.lock();
     let stdout = io::stdout();
     let mut out = stdout.lock();
+    if cli.worker_yara {
+        let installed = read_rules(&mut input).and_then(|blob| install_rules(&mut config, &blob));
+        if let Err(what) = installed {
+            return protocol_error(&what);
+        }
+    }
+    let config = &config;
     if send(&mut out, &Response::Ready { protocol: PROTOCOL }).is_err() {
         return ExitCode::from(EXIT_PROTOCOL);
     }
@@ -272,6 +281,42 @@ pub fn run_worker(cli: &Cli, config: &Config) -> ExitCode {
             return ExitCode::from(EXIT_PROTOCOL);
         }
     }
+}
+
+/// The rules preamble: `{"type":"rules","len":N}`, then exactly N bytes.
+fn read_rules(input: &mut impl BufRead) -> Result<Vec<u8>, String> {
+    #[derive(Deserialize)]
+    #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+    enum Header {
+        Rules { len: usize },
+    }
+    let line = match read_line_bounded(input, 1024) {
+        Ok(Line::Data(l)) => l,
+        _ => return Err("missing YARA rules header".into()),
+    };
+    let Ok(Header::Rules { len }) = serde_json::from_slice::<Header>(&line) else {
+        return Err("malformed YARA rules header".into());
+    };
+    if len > MAX_RULES_BLOB {
+        return Err(format!("YARA rules blob of {len} bytes is over the limit"));
+    }
+    let mut blob = vec![0u8; len];
+    input
+        .read_exact(&mut blob)
+        .map_err(|e| format!("truncated YARA rules blob: {e}"))?;
+    Ok(blob)
+}
+
+#[cfg(feature = "yara")]
+fn install_rules(config: &mut Config, blob: &[u8]) -> Result<(), String> {
+    let rules = rtriage_core::yara::YaraRules::deserialize(blob).map_err(|e| e.to_string())?;
+    config.yara = Some(std::sync::Arc::new(rules));
+    Ok(())
+}
+
+#[cfg(not(feature = "yara"))]
+fn install_rules(_config: &mut Config, _blob: &[u8]) -> Result<(), String> {
+    Err("YARA rules received, but this worker was built without YARA support".into())
 }
 
 fn protocol_error(what: &str) -> ExitCode {
@@ -423,12 +468,16 @@ pub struct Spawn {
     pub max_line: usize,
     /// Let the worker's stderr through (verbose runs).
     pub show_stderr: bool,
+    /// Compiled YARA rules sent before the first request (`--worker-yara`).
+    pub rules: Option<std::sync::Arc<Vec<u8>>>,
 }
 
 /// A running worker process.
 pub struct Worker {
     child: Child,
-    stdin: Option<ChildStdin>,
+    /// Lines for the writer thread; dropping it closes the worker's stdin.
+    lines: Option<mpsc::Sender<Vec<u8>>>,
+    writer: Option<JoinHandle<()>>,
     reader: Option<JoinHandle<()>>,
 }
 
@@ -455,14 +504,25 @@ impl Worker {
             .stdout
             .take()
             .ok_or_else(|| io::Error::other("worker stdout not captured"))?;
-        let stdin = child.stdin.take();
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| io::Error::other("worker stdin not captured"))?;
         let max_line = spawn.max_line;
         let reader = std::thread::Builder::new()
-            .name(format!("rtriage-worker-{}", tag.slot))
+            .name(format!("rtriage-worker-{}-out", tag.slot))
             .spawn(move || read_events(io::BufReader::new(stdout), max_line, tag, &tx))?;
+        // Writing happens in its own thread too: a worker that stops reading
+        // (e.g. mid rules blob) can then never block the pool.
+        let (lines, rx) = mpsc::channel::<Vec<u8>>();
+        let rules = spawn.rules.clone();
+        let writer = std::thread::Builder::new()
+            .name(format!("rtriage-worker-{}-in", tag.slot))
+            .spawn(move || write_lines(stdin, rules.as_deref().map(Vec::as_slice), &rx))?;
         Ok(Worker {
             child,
-            stdin,
+            lines: Some(lines),
+            writer: Some(writer),
             reader: Some(reader),
         })
     }
@@ -472,35 +532,39 @@ impl Worker {
     /// # Errors
     /// The worker's stdin is closed or broken.
     pub fn send(&mut self, req: &Request) -> io::Result<()> {
-        let stdin = self
-            .stdin
-            .as_mut()
-            .ok_or_else(|| io::Error::other("worker stdin already closed"))?;
-        serde_json::to_writer(&mut *stdin, req)?;
-        stdin.write_all(b"\n")?;
-        stdin.flush()
+        let mut line = serde_json::to_vec(req)?;
+        line.push(b'\n');
+        self.lines
+            .as_ref()
+            .ok_or_else(|| io::Error::other("worker stdin already closed"))?
+            .send(line)
+            .map_err(|_| io::Error::other("worker stdin closed"))
     }
 
     /// Closes stdin (the worker then exits on its own) and waits for it.
     pub fn finish(mut self) -> Option<std::process::ExitStatus> {
-        drop(self.stdin.take());
+        drop(self.lines.take());
         let status = self.child.wait().ok();
-        self.join_reader();
+        self.join_threads();
         status
     }
 
     /// Kills the worker and reaps it.
     pub fn kill(mut self) -> Option<std::process::ExitStatus> {
-        drop(self.stdin.take());
+        drop(self.lines.take());
         let _ = self.child.kill();
         let status = self.child.wait().ok();
-        self.join_reader();
+        self.join_threads();
         status
     }
 
-    fn join_reader(&mut self) {
-        if let Some(r) = self.reader.take() {
-            let _ = r.join();
+    /// Joins both pipe threads (they end once the process is gone).
+    fn join_threads(&mut self) {
+        for t in [self.writer.take(), self.reader.take()]
+            .into_iter()
+            .flatten()
+        {
+            let _ = t.join();
         }
     }
 }
@@ -508,10 +572,31 @@ impl Worker {
 impl Drop for Worker {
     fn drop(&mut self) {
         // Never leave a worker running behind an early return.
-        if self.reader.is_some() {
+        if self.reader.is_some() || self.writer.is_some() {
+            drop(self.lines.take());
             let _ = self.child.kill();
             let _ = self.child.wait();
-            self.join_reader();
+            self.join_threads();
+        }
+    }
+}
+
+/// Writer thread: the rules preamble (if any), then each request line, until
+/// the channel closes (stdin is then closed) or a write fails.
+fn write_lines(mut stdin: ChildStdin, rules: Option<&[u8]>, rx: &mpsc::Receiver<Vec<u8>>) {
+    if let Some(blob) = rules {
+        let header = format!("{{\"type\":\"rules\",\"len\":{}}}\n", blob.len());
+        let sent = stdin
+            .write_all(header.as_bytes())
+            .and_then(|()| stdin.write_all(blob))
+            .and_then(|()| stdin.flush());
+        if sent.is_err() {
+            return;
+        }
+    }
+    for line in rx {
+        if stdin.write_all(&line).and_then(|()| stdin.flush()).is_err() {
+            return;
         }
     }
 }
