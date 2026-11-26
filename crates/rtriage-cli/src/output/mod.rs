@@ -1,5 +1,6 @@
 //! Report renderers.
 
+mod common;
 pub mod json;
 // Wired into the CLI in the Markdown steps that follow (M6.1 task 4).
 #[allow(dead_code)]

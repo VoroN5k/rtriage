@@ -10,19 +10,19 @@ use std::io::{self, Write};
 use anstyle::{AnsiColor, Style};
 use rtriage_core::analyzers::iocs::defang_text;
 use rtriage_core::report::{
-    AnalysisLimit, ElfFacts, ElfHeaderFacts, ExplainerKind, PeExportsFacts, PeResourcesFacts,
-    Reduction, SignatureStatus,
+    AnalysisLimit, ElfFacts, ElfHeaderFacts, PeExportsFacts, PeResourcesFacts, Reduction,
+    SignatureStatus,
 };
 use rtriage_core::report::{
     EntropyFacts, ExtractedString, PeImportsFacts, PeSectionFacts, StringEncoding, StringKind,
     StringsFacts,
 };
 use rtriage_core::report::{Ioc, IocFacts, IocKind, YaraFacts};
-use rtriage_core::{
-    Evidence, Finding, Format, PeFacts, PeHeaderFacts, Report, Risk, RiskLevel, Severity,
-};
-use serde::Serialize;
+use rtriage_core::{Evidence, Finding, PeFacts, PeHeaderFacts, Report, Risk, RiskLevel, Severity};
 
+use super::common::{
+    enum_name, explainer_label, format_name, group_digits, human_size, short_size,
+};
 use super::{Failure, Run, SkippedPath};
 use crate::worker::Summary;
 use rtriage_sanitize::sanitize;
@@ -1114,14 +1114,6 @@ fn render_pe_imports(i: &PeImportsFacts, out: &mut dyn Write, p: &Painter) -> io
     Ok(())
 }
 
-fn format_name(f: Format) -> &'static str {
-    match f {
-        Format::Pe => "PE",
-        Format::Elf => "ELF",
-        _ => "unknown",
-    }
-}
-
 fn evidence(e: &Evidence, p: &Painter) -> String {
     match e {
         Evidence::Range { offset, len } => format!("range 0x{offset:08x} (+{len} bytes)"),
@@ -1145,14 +1137,6 @@ fn evidence(e: &Evidence, p: &Painter) -> String {
     }
 }
 
-/// Same snake_case name as in the JSON output, so text and JSON agree.
-fn enum_name<T: Serialize>(v: &T) -> String {
-    serde_json::to_value(v)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_else(|| "?".to_owned())
-}
-
 /// Sanitized value, cut to [`MAX_VALUE_CHARS`] with a note of the full length.
 fn shorten(value: &str, full_len: u64, p: &Painter) -> String {
     let shown: String = value.chars().take(MAX_VALUE_CHARS).collect();
@@ -1162,64 +1146,6 @@ fn shorten(value: &str, full_len: u64, p: &Painter) -> String {
         format!("{clean} [... {} chars total]", group_digits(full_len))
     } else {
         clean
-    }
-}
-
-/// `48128` -> `"48 128 bytes (47.0 KiB)"`.
-fn human_size(n: u64) -> String {
-    if n < 1024 {
-        format!("{} bytes", group_digits(n))
-    } else {
-        format!("{} bytes ({})", group_digits(n), short_size(n))
-    }
-}
-
-/// `16384` -> `"16.0 KiB"`.
-fn short_size(n: u64) -> String {
-    const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
-    if n < 1024 {
-        return format!("{n} B");
-    }
-    let mut value = n as f64 / 1024.0;
-    let mut unit = "KiB";
-    for next in UNITS.iter().skip(1) {
-        if value < 1024.0 {
-            break;
-        }
-        value /= 1024.0;
-        unit = next;
-    }
-    format!("{value:.1} {unit}")
-}
-
-/// `1204` -> `"1 204"`.
-fn group_digits(n: u64) -> String {
-    let digits = n.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(' ');
-        }
-        out.push(c);
-    }
-    out
-}
-
-/// `UPX (PE-PACKER-KNOWN)` for packers, `the Go runtime` for runtimes.
-fn explainer_label(kind: ExplainerKind, name: &str, by: Option<&str>) -> String {
-    match (kind, by) {
-        (ExplainerKind::Runtime, _) => format!("the {} runtime", runtime_display(name)),
-        (_, Some(by)) => format!("{name} ({by})"),
-        (_, None) => name.to_owned(),
-    }
-}
-
-/// Display name of a runtime (`go` -> `Go`).
-fn runtime_display(name: &str) -> &str {
-    match name {
-        "go" => "Go",
-        "rust" => "Rust",
-        other => other,
     }
 }
 
@@ -1492,17 +1418,6 @@ mod tests {
         );
         assert!(!s.contains('\x1b'));
         assert!(s.contains("\\x1b[2J\\x1b"));
-    }
-
-    #[test]
-    fn number_formatting() {
-        assert_eq!(group_digits(0), "0");
-        assert_eq!(group_digits(999), "999");
-        assert_eq!(group_digits(1204), "1 204");
-        assert_eq!(group_digits(1_234_567), "1 234 567");
-        assert_eq!(human_size(570), "570 bytes");
-        assert_eq!(human_size(48_128), "48 128 bytes (47.0 KiB)");
-        assert_eq!(short_size(3 * 1024 * 1024), "3.0 MiB");
     }
 
     #[test]
