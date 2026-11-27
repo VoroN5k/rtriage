@@ -1,0 +1,57 @@
+---
+source: crates/rtriage-cli/src/output/markdown.rs
+assertion_line: 1333
+expression: "render_report(&text_report(), OPTS)"
+---
+## `sample.bin`
+
+**Risk: CLEAN-LOOKING** · score 0
+
+| Field | Value |
+| --- | --- |
+| Type | unknown |
+| Size | 12 383 bytes (12.1 KiB) |
+| MD5 | `a591a28541051596d71dedd45c2dd382` |
+| SHA-1 | `a91387c84dc11466737cc3e1e97f1c2e60c0e60d` |
+| SHA-256 | `632434ea68a1d4895c9351ae89074b81bd073706f4edf8681db6fd6d3a4f7aad` |
+
+### Findings
+
+#### HIGH · `TEST-FINDING` · `Example finding`
+
+Confidence high, category injection.
+
+`Shown to check the layout.`
+
+- section 1 `.text`
+- `entropy` = 7.912
+
+ATT&CK: `T1055`
+
+### Entropy
+
+Whole file 6.243 bits/byte.
+
+High-entropy regions (>= 7.20, window 4096):
+
+| Start | End | Size | Entropy |
+| --- | --- | --- | --- |
+| 0x00000000 | 0x00002000 | 8.0 KiB | 7.999 |
+
+### IOCs
+
+2 found.
+
+| Kind | Value | Scope | Count | First offset |
+| --- | --- | --- | --- | --- |
+| url | `hxxp://c2[.]example[.]ru/gate.php` |  | 1 | 0x00000002 |
+| domain | `c2[.]example[.]ru` |  | 1 | 0x00000002 |
+
+### Strings
+
+35 found (ASCII + UTF-16LE, min 5), 2 classified.
+
+| Kind | Offset | Enc | Value |
+| --- | --- | --- | --- |
+| url | 0x00000002 | A | `hxxp://c2[.]example[.]ru/gate.php` |
+| registry_key | 0x00000021 | A | `Software\Microsoft\Windows\CurrentVersion\Run` |

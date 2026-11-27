@@ -14,6 +14,10 @@ use rtriage_sanitize::single_line;
 /// Longest value shown, in characters; the rest is summarized.
 pub const VALUE_LIMIT: usize = 200;
 
+/// Longest finding detail shown, in characters: details are our own prose
+/// (with file values inside), longer than a single value but still bounded.
+pub const DETAIL_LIMIT: usize = 1_000;
+
 /// Default document limit in characters (GitHub's comment/issue body limit
 /// is 65 536; this leaves room for what the user adds).
 pub const DEFAULT_LIMIT: usize = 60_000;
@@ -23,23 +27,28 @@ pub const TAIL_RESERVE: usize = 4_000;
 
 /// `value` as one inline code span (or `_empty_`).
 pub fn code(value: &str) -> String {
-    span(value, false)
+    span(value, false, VALUE_LIMIT)
+}
+
+/// [`code`] with its own character limit instead of [`VALUE_LIMIT`].
+pub fn code_limited(value: &str, limit: usize) -> String {
+    span(value, false, limit)
 }
 
 /// `value` as a code span for a table cell: `|` is escaped, because GFM
 /// splits rows on it even inside code spans.
 pub fn cell(value: &str) -> String {
-    span(value, true)
+    span(value, true, VALUE_LIMIT)
 }
 
-fn span(value: &str, in_table: bool) -> String {
+fn span(value: &str, in_table: bool, limit: usize) -> String {
     let clean = single_line(value);
     if clean.is_empty() {
         return "_empty_".to_owned();
     }
     let total = value.chars().count();
-    let shown: String = clean.chars().take(VALUE_LIMIT).collect();
-    let cut = clean.chars().count() > VALUE_LIMIT;
+    let shown: String = clean.chars().take(limit).collect();
+    let cut = clean.chars().count() > limit;
     let body = if in_table {
         shown.replace('|', "\\|")
     } else {

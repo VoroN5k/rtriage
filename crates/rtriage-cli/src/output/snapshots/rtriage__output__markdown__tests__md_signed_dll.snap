@@ -1,0 +1,118 @@
+---
+source: crates/rtriage-cli/src/output/markdown.rs
+assertion_line: 1338
+expression: "render_report(&signed_dll_report(), OPTS)"
+---
+## `helper.dll`
+
+**Risk: CLEAN-LOOKING** · score 6
+
+| Field | Value |
+| --- | --- |
+| Type | PE |
+| Size | 2 057 bytes (2.0 KiB) |
+| MD5 | `a35957cb91f3a5a2410150a797c1404a` |
+| SHA-1 | `bcdbe707b480d5b63a299da2503a8ecbeabc70c7` |
+| SHA-256 | `21363199bfc8940dffad972b441593ceb6e2826cba599ee27ff29198b46faf83` |
+
+### Findings
+
+#### LOW · `PE-TLS-CALLBACKS` · `TLS callbacks run before the entry point`
+
+Confidence medium, category anti_analysis.
+
+`1 TLS callback(s) execute before the entry point, so a debugger breaking at the entry point misses them; used for anti-debugging and early unpacking. Rust and MinGW runtimes also register TLS callbacks.`
+
+- `callback` = `0x140001000 in #0 .text`
+
+#### LOW · `PE-IMPORTS-FEW` · `Very few imports`
+
+Confidence low, category anomaly.
+
+`Normal programs import dozens of functions through their C runtime. A near-empty import table suggests packing or position-independent code that finds APIs itself.`
+
+- `imported functions` = `1`
+- import `KERNEL32.dll!ExitProcess`
+
+#### INFO · `PE-OVERLAY` · `Data appended after the image`
+
+Confidence high, category anomaly.
+
+`Bytes after the last section are not loaded by Windows. Installers and self-extracting archives keep their payload there; so do droppers.`
+
+- range 0x00000800 (+9 bytes)
+- `kind` = `zip`
+
+#### INFO · `PE-PDB-PATH` · `Debug symbols path embedded`
+
+Confidence high, category metadata.
+
+`The linker recorded where the PDB was written. Build paths often reveal user names, project names and directory layouts useful for attribution and for clustering samples from the same build environment.`
+
+- `PdbPath` = `C:\x\y.pdb`
+
+### PE
+
+- Machine: `amd64` (64-bit), dll, `windows_cui`
+- Entry point: 0x00001000 in section 0 `.text`
+- Image base: 0x140000000
+- Timestamp: 0x5f5e1000 (`2020-09-13T12:26:40Z`)
+- Checksum: 0x00000000 (not set; computed 0x00009ecd)
+- DLL flags: `high_entropy_va, dynamic_base, nx_compat, terminal_server_aware`
+- Overlay: 0x800, 9 B, `zip`
+- TLS: 1 callback(s): 0x140001000
+- PDB: `C:\x\y.pdb`
+- Rich: 1 records, checksum valid
+
+### Sections
+
+| Index | Name | VirtAddr | VirtSize | RawSize | Perm | Entropy | Note |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | `.text` | 0x1000 | 0x40 | 0x200 | `r-x` | 0.544 |  |
+| 1 | `.data` | 0x2000 | 0x20 | 0x200 | `rw-` | 0.000 |  |
+| 2 | `.rdata` | 0x3000 | 0x1bb | 0x200 | `r--` | 2.886 |  |
+
+### Imports
+
+1 functions from 1 libraries, imphash `f9ade0aa18f660a34a4fa23392e21838`.
+
+| Library | Count | Functions |
+| --- | --- | --- |
+| `KERNEL32.dll` | 1 | `ExitProcess` |
+
+### Exports
+
+`helper.dll`, 2 exports (1 forwarded).
+
+| Ordinal | Name | Forwarder |
+| --- | --- | --- |
+| 1 | `Init` |  |
+| 2 | `OpenFile` | `KERNEL32.CreateFileW` |
+
+### Resources
+
+1 entries.
+
+| Type | Name | Lang | Size | Entropy | Kind |
+| --- | --- | --- | --- | --- | --- |
+| `RT_MANIFEST` | `#2` | 1033 | 11 B | - |  |
+
+### Entropy
+
+Whole file 1.685 bits/byte.
+
+No high-entropy regions (>= 7.20, window 4096).
+
+### IOCs
+
+0 found.
+
+_none_
+
+### Strings
+
+12 found (ASCII + UTF-16LE, min 5), 1 classified.
+
+| Kind | Offset | Enc | Value |
+| --- | --- | --- | --- |
+| file_path | 0x000006dc | A | `C:\x\y.pdb` |
