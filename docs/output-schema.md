@@ -2,6 +2,10 @@
 
 `rtriage -f json` writes one JSON document per invocation.
 
+Markdown (`-f md`) and text output are for people and have no schema:
+their layout may change in any release without a version bump. Tools
+should read JSON.
+
 **Versioning.** `schema_version` is an integer.
 
 | Change | Before the first release | After a release |

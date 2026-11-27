@@ -59,11 +59,13 @@ rtriage sample.exe                        # full report, analyzed in-process
 rtriage --explain sample.exe              # ... plus the score breakdown
 rtriage -f json -o report.json sample.exe # versioned JSON
 rtriage --defang sample.exe               # hxxp://evil[.]com, 1[.]2[.]3[.]4 in text
+rtriage -f md sample.exe > report.md      # Markdown for a ticket, issue or wiki
 
 rtriage samples/                          # every file, full reports, worker processes
 rtriage scan samples/ -j 8                # batch table sorted by risk
 rtriage scan samples/ -f json > out.ndjson          # NDJSON, one summary line
 rtriage scan samples/ --full -f json > out.ndjson   # ... plus one line per report
+rtriage scan samples/ -f md               # Markdown table sorted by risk
 
 rtriage scan samples/ --fail-on medium    # exit 3 if any file is medium or worse (CI)
 rtriage --rules-dir my-rules/ sample.exe  # your rules layered over the bundled ones
@@ -84,6 +86,37 @@ FIFOs and devices are skipped. A worker that crashes, hangs past
 `--timeout` + 5 s, or floods its output loses only the file it was on; the
 file is reported as `crashed`, `timed_out` or `invalid_response` and a
 fresh worker continues.
+
+### Markdown output
+
+`-f md` writes one document (`# rtriage report`) for a ticket, issue or
+wiki page: the same sections as the text report, tables where text has
+columns, several files in input order separated by rules, then failed and
+skipped files. `scan -f md` writes the risk table first and, with
+`--full`, every report after it.
+
+- **Nothing from the file becomes markup.** Every value taken from the
+  file (names, strings, paths, evidence, YARA rule names, the file name in
+  headings) is an inline code span, so a rendered page shows no links,
+  images, HTML, @mentions or #references. Values longer than 200
+  characters are cut with their full length noted; finding details up to
+  1 000.
+- **Always defanged.** URLs, domains, IPs and emails appear as
+  `hxxp://evil[.]com`, `1[.]2[.]3[.]4`. `--no-defang` shows them as found;
+  `--defang` changes nothing in Markdown.
+- **Size limit.** GitHub rejects issue and comment bodies over 65 536
+  characters, so documents stop at 60 000 by default (`--md-limit N`,
+  `0` = no limit). The cut is on a line boundary (tables keep whole rows)
+  and a note says how many lines and characters were left out; failed and
+  skipped files are always listed. Truncation never changes the exit code
+  or `--fail-on`.
+- `--no-defang` and `--md-limit` with another format are usage errors
+  (exit 2).
+- `scan --full -f md` holds reports until the table is written, but only
+  as many as the limit can show; with `--md-limit 0` it holds all of them,
+  so use `-f json` for very large batches.
+
+Markdown is for people; `-f json` stays the machine format.
 
 ### Exit codes
 
