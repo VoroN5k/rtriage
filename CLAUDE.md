@@ -86,6 +86,7 @@ rtriage/
 ├── fuzz/                     # cargo-fuzz targets
 ├── benches/
 └── docs/
+    ├── design/               # approved design specs (YYYY-MM-DD-<topic>-design.md); plans are not kept in the repo
     ├── heuristics.md         # every heuristic: rationale, thresholds, false-positive notes
     └── output-schema.md      # JSON schema documentation
 ```

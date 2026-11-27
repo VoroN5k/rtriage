@@ -13,3 +13,6 @@
 # insta
 *.snap.new
 *.pending-snap
+
+# Local agent workspace: plans, ledgers, the release audit (never committed)
+/.superpowers/
