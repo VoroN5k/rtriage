@@ -16,3 +16,6 @@
 
 # Local agent workspace: plans, ledgers, the release audit (never committed)
 /.superpowers/
+
+# Synthetic samples from `cargo run -p rtriage-fixtures --example samples` (never committed)
+/samples/
