@@ -4,7 +4,9 @@
 //!   order, as the in-process output would show it;
 //! - **scan** (`rtriage scan`): a compact table sorted by risk; JSON is
 //!   NDJSON ending in one `summary` line. Only compact rows are kept in
-//!   memory; full reports (`--full`) are streamed out as they finish.
+//!   memory; full reports (`--full`) are streamed out as they finish,
+//!   except in Markdown, where they follow the table and are held up to the
+//!   document limit (all of them with `--md-limit 0`).
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -18,7 +20,7 @@ use anyhow::Context;
 use clap::ValueEnum;
 
 use crate::cli::{Cli, OutputFormat, ScanArgs};
-use crate::output::markdown::Document;
+use crate::output::markdown::{Document, HeldBodies};
 use crate::output::{json, text, Failure, SkippedPath};
 use crate::pool::{self, Outcome, PoolOptions, GRACE};
 use crate::worker::{Spawn, Summary, DEFAULT_MAX_RESPONSE_LINE};
@@ -128,11 +130,17 @@ pub fn scan(
     let opts = pool_options(cli, worker_spawn(cli, config, color, body)?);
     let mut rows: Vec<Summary> = Vec::new();
     let mut printed = 0usize;
+    // Markdown puts the table first, so `--full` bodies wait (bounded by
+    // the document limit; see HeldBodies).
+    let md = cli.format == OutputFormat::Md;
+    let mut held = HeldBodies::new(cli.md_limit());
     let result = pool::run(files, &opts, |o| {
         match o {
             Outcome::Report { summary, body, .. } => {
                 if args.full {
-                    if json {
+                    if md {
+                        held.push(body);
+                    } else if json {
                         json::ndjson_report(&mut out, &body)?;
                     } else {
                         if printed > 0 {
@@ -156,6 +164,19 @@ pub fn scan(
     });
     result.context("batch analysis stopped")?;
     sort_rows(&mut rows);
+    let gate = Gate {
+        levels: rows.iter().map(|r| r.level).collect(),
+        partial: rows.iter().filter(|r| r.partial).count(),
+    };
+    if md {
+        let mut doc = Document::new(out, cli.md_limit())?;
+        doc.scan_table(&rows, failures.len())?;
+        doc.held(held)?;
+        doc.finish(failures, skipped)?
+            .flush()
+            .context("cannot write report")?;
+        return Ok(gate);
+    }
     if json {
         json::ndjson_summary(&mut out, &rows, failures, skipped)?;
     } else {
@@ -165,10 +186,7 @@ pub fn scan(
         text::render_scan(&rows, failures, skipped, &mut out, color)?;
     }
     out.flush().context("cannot write report")?;
-    Ok(Gate {
-        levels: rows.iter().map(|r| r.level).collect(),
-        partial: rows.iter().filter(|r| r.partial).count(),
-    })
+    Ok(gate)
 }
 
 /// Level descending, then score descending, then path ascending: the

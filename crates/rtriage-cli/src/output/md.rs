@@ -145,6 +145,23 @@ impl<W: Write> Budget<W> {
         self.body.any() || self.tail.any()
     }
 
+    /// Counts `lines` / `chars` that were never written (text the caller
+    /// chose not to keep) as dropped from the current part. The part counts
+    /// as cut from here on, so nothing after it is written either. Call it
+    /// only between whole lines.
+    pub fn skip(&mut self, lines: u64, chars: u64) {
+        if self.limit.is_none() || lines == 0 {
+            return;
+        }
+        let dropped = if self.in_tail {
+            &mut self.tail
+        } else {
+            &mut self.body
+        };
+        dropped.lines = dropped.lines.saturating_add(lines);
+        dropped.chars = dropped.chars.saturating_add(chars);
+    }
+
     /// Ends the body (writing its note if it was cut) and starts the tail.
     ///
     /// # Errors
@@ -392,6 +409,52 @@ mod tests {
         b.begin_tail().unwrap();
         b.write_all(tail.as_bytes()).unwrap();
         String::from_utf8(b.finish().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn skip_counts_into_the_note_and_cuts_the_part() {
+        let mut b = Budget::new(Vec::new(), Some(100), 0);
+        b.write_all(
+            b"a
+",
+        )
+        .unwrap();
+        b.skip(7, 40);
+        b.write_all(
+            b"b
+",
+        )
+        .unwrap();
+        b.begin_tail().unwrap();
+        b.write_all(
+            b"t
+",
+        )
+        .unwrap();
+        let out = String::from_utf8(b.finish().unwrap()).unwrap();
+        // The line after a skip is dropped too (no holes), and counted.
+        assert!(out.contains("8 more lines (42 characters)"), "{out}");
+        assert!(
+            out.starts_with(
+                "a
+
+> **truncated:**"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.ends_with(
+                "
+
+t
+"
+            ),
+            "{out}"
+        );
+        // Without a limit there is nothing to skip.
+        let mut b = Budget::new(Vec::new(), None, 0);
+        b.skip(3, 3);
+        assert!(!b.truncated());
     }
 
     #[test]

@@ -680,3 +680,109 @@ fn fail_on_ignores_truncation() {
     assert_eq!(out.status.code(), Some(3));
     assert!(stdout(&out).contains("truncated"));
 }
+
+/// A directory with a medium-risk, a low-risk and a clean file.
+fn scan_tree(name: &str) -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let inject = std::fs::read(injection_pe(&format!("{name}-inject.exe"))).unwrap();
+    std::fs::write(dir.join("inject.exe"), inject).unwrap();
+    let upx = std::fs::read(upx_pe(&format!("{name}-upx.exe"))).unwrap();
+    std::fs::write(dir.join("upx.exe"), upx).unwrap();
+    std::fs::write(dir.join("clean.txt"), b"plain text, nothing to see").unwrap();
+    dir
+}
+
+#[test]
+fn scan_md_table_sorted_by_risk() {
+    let dir = scan_tree("md-scan-sort");
+    let out = raw(&["scan", "-f", "md", dir.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0));
+    let md = stdout(&out);
+    assert!(
+        md.starts_with("# rtriage report\n\n## Scan\n\n3 file(s): "),
+        "{md}"
+    );
+    let pos = |f: &str| md.find(f).unwrap();
+    assert!(
+        pos("inject.exe") < pos("upx.exe") && pos("upx.exe") < pos("clean.txt"),
+        "{md}"
+    );
+    assert!(md.contains("| 1 | MEDIUM |"), "{md}");
+    assert!(
+        !md.contains("### Findings"),
+        "no bodies without --full\n{md}"
+    );
+    assert_valid_md(&md);
+}
+
+#[test]
+fn scan_md_full_reports_after_table() {
+    let dir = scan_tree("md-scan-full");
+    let out = raw(&[
+        "scan",
+        "--full",
+        "-f",
+        "md",
+        dir.to_str().unwrap(),
+        "md-scan-gone.bin",
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    let md = stdout(&out);
+    let table = md.find("## Scan").unwrap();
+    let first_body = md.find("### Findings").unwrap();
+    assert!(table < first_body, "{md}");
+    assert_eq!(md.matches("### Findings").count(), 3, "{md}");
+    assert!(md.trim_end().ends_with("(io)"), "tail last\n{md}");
+    assert!(md.contains("## Failed"), "{md}");
+    assert_valid_md(&md);
+}
+
+#[test]
+fn scan_md_truncated_counts_omitted_lines() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("md-scan-cut");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 0..4 {
+        let f = many_strings(&format!("md-scan-cut-{i}.bin"));
+        std::fs::copy(&f, dir.join(format!("{i}.bin"))).unwrap();
+    }
+    let d = dir.to_str().unwrap();
+    let run = |limit: &str| {
+        stdout(&raw(&[
+            "scan",
+            "--full",
+            "-f",
+            "md",
+            "--all-strings",
+            "-j",
+            "2",
+            "--md-limit",
+            limit,
+            d,
+        ]))
+    };
+    let all = run("0");
+    let cut = run("8000");
+    assert!(!all.contains("truncated"));
+    let note = cut
+        .lines()
+        .find(|l| l.starts_with("> **truncated:** "))
+        .unwrap();
+    let dropped: u64 = note["> **truncated:** ".len()..]
+        .split(" more lines")
+        .next()
+        .unwrap()
+        .replace(' ', "")
+        .parse()
+        .unwrap();
+    // Shown lines (without the note and its blank line) + dropped = everything.
+    let shown = cut.lines().count() as u64 - 2;
+    assert_eq!(shown + dropped, all.lines().count() as u64, "{note}");
+    assert!(
+        cut.contains("## Scan") && cut.contains("| 4 |"),
+        "table kept\n{cut}"
+    );
+    assert_valid_md(&cut);
+}

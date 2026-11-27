@@ -1,0 +1,14 @@
+---
+source: crates/rtriage-cli/src/output/markdown.rs
+assertion_line: 1723
+expression: "render_scan_table(&scan_rows(), 1)"
+---
+## Scan
+
+3 file(s): 1 high, 1 medium, 0 low, 1 clean-looking; 1 failed.
+
+| Rank | Risk | Score | Type | Size | File | Top finding | Flags |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | HIGH | 66 | PE | 47.0 KiB | `dir/a.exe` | `PE-SECTION-RWX` `Writable and executable section` |  |
+| 2 | MEDIUM | 40 | PE | 47.0 KiB | `dir/packed.exe` | `PE-SECTION-RWX` `Writable and executable section` | packed, partial |
+| 3 | CLEAN-LOOKING | 0 | unknown | 12 B | `dir/clean.bin` | - |  |

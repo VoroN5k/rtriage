@@ -23,6 +23,7 @@ use super::common::{
 };
 use super::md::{cell, code, code_limited, Budget, DETAIL_LIMIT, TAIL_RESERVE, VALUE_LIMIT};
 use super::{Failure, Run, SkippedPath};
+use crate::worker::Summary;
 
 /// Classified strings and IOCs shown per kind before "+N more" (as text).
 const PER_KIND: usize = 20;
@@ -70,13 +71,19 @@ pub fn render(
     Ok(())
 }
 
-/// A Markdown document written as reports arrive: the title, report bodies
-/// separated by rules, then the tail (failed and skipped files), all under
-/// one [`Budget`] that keeps room for the tail.
+/// A Markdown document written as reports arrive: the title, an optional
+/// scan table, report bodies separated by rules, then the tail (failed and
+/// skipped files), all under one [`Budget`] that keeps room for the tail.
 pub struct Document<W: Write> {
     budget: Budget<W>,
-    reports: usize,
+    /// Parts written so far (scan table and bodies).
+    parts: usize,
 }
+
+/// The rule written between two parts.
+const SEPARATOR: &str = "---
+
+";
 
 impl<W: Write> Document<W> {
     /// Starts the document (writes the title).
@@ -90,7 +97,7 @@ impl<W: Write> Document<W> {
 
 ",
         )?;
-        Ok(Document { budget, reports: 0 })
+        Ok(Document { budget, parts: 0 })
     }
 
     /// Adds one body from [`render_report`].
@@ -98,15 +105,31 @@ impl<W: Write> Document<W> {
     /// # Errors
     /// Errors of the inner writer.
     pub fn report(&mut self, body: &str) -> io::Result<()> {
-        if self.reports > 0 {
-            self.budget.write_all(
-                b"---
-
-",
-            )?;
+        if self.parts > 0 {
+            self.budget.write_all(SEPARATOR.as_bytes())?;
         }
-        self.reports += 1;
+        self.parts += 1;
         self.budget.write_all(body.as_bytes())
+    }
+
+    /// Adds the scan table ([`render_scan_table`]).
+    ///
+    /// # Errors
+    /// Errors of the inner writer.
+    pub fn scan_table(&mut self, rows: &[Summary], failed: usize) -> io::Result<()> {
+        self.report(&render_scan_table(rows, failed))
+    }
+
+    /// Adds the bodies of `held`, then counts the ones it dropped.
+    ///
+    /// # Errors
+    /// Errors of the inner writer.
+    pub fn held(&mut self, held: HeldBodies) -> io::Result<()> {
+        for body in &held.bodies {
+            self.report(body)?;
+        }
+        self.budget.skip(held.dropped_lines, held.dropped_chars);
+        Ok(())
     }
 
     /// Writes the tail and the truncation notes; returns the inner writer.
@@ -114,7 +137,7 @@ impl<W: Write> Document<W> {
     /// # Errors
     /// Errors of the inner writer.
     pub fn finish(mut self, failures: &[Failure], skipped: &[SkippedPath]) -> io::Result<W> {
-        if self.reports == 0 && failures.is_empty() {
+        if self.parts == 0 && failures.is_empty() {
             self.budget.write_all(
                 b"_No files analyzed._
 
@@ -126,6 +149,119 @@ impl<W: Write> Document<W> {
             .write_all(render_tail(failures, skipped).as_bytes())?;
         self.budget.finish()
     }
+}
+
+/// Report bodies kept for `scan --full -f md`, whose table comes first:
+/// only as many as the document can show. Once the body allowance is used
+/// (the body that crosses it is still kept, so the budget is sure to cut),
+/// later bodies are only counted for the truncation note.
+#[derive(Debug, Default)]
+pub struct HeldBodies {
+    cap: Option<usize>,
+    used: usize,
+    full: bool,
+    bodies: Vec<String>,
+    dropped_lines: u64,
+    dropped_chars: u64,
+}
+
+impl HeldBodies {
+    /// Holds bodies for a document limited to `limit` characters.
+    pub fn new(limit: Option<usize>) -> Self {
+        HeldBodies {
+            cap: limit.map(|l| l.saturating_sub(TAIL_RESERVE)),
+            ..HeldBodies::default()
+        }
+    }
+
+    /// Keeps or counts one body.
+    pub fn push(&mut self, body: String) {
+        let chars = body.chars().count().saturating_add(SEPARATOR.len());
+        if self.full {
+            let lines = body.matches('\n').count().saturating_add(2);
+            self.dropped_lines = self
+                .dropped_lines
+                .saturating_add(u64::try_from(lines).unwrap_or(u64::MAX));
+            self.dropped_chars = self
+                .dropped_chars
+                .saturating_add(u64::try_from(chars).unwrap_or(u64::MAX));
+            return;
+        }
+        self.used = self.used.saturating_add(chars);
+        self.full = self.cap.is_some_and(|cap| self.used > cap);
+        self.bodies.push(body);
+    }
+}
+
+/// The `scan` table: counts, then one row per file in the caller's order
+/// (sorted by risk).
+pub fn render_scan_table(rows: &[Summary], failed: usize) -> String {
+    let mut d = Doc {
+        out: String::new(),
+        defang: false,
+    };
+    d.para("## Scan");
+    let c = super::json::Counts::of(rows);
+    d.para(&format!(
+        "{} file(s): {} high, {} medium, {} low, {} clean-looking{}.",
+        group_digits(rows.len() as u64),
+        c.high,
+        c.medium,
+        c.low,
+        c.clean_looking,
+        if failed == 0 {
+            String::new()
+        } else {
+            format!("; {failed} failed")
+        }
+    ));
+    if rows.is_empty() {
+        d.para("_No files analyzed._");
+        return d.out;
+    }
+    let table: Vec<Vec<String>> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let size = if r.size < 1024 {
+                format!("{} B", r.size)
+            } else {
+                short_size(r.size)
+            };
+            let top = r.top_finding.as_ref().map_or_else(
+                || "-".to_owned(),
+                |t| format!("{} {}", cell(&t.id), cell(&t.title)),
+            );
+            let flags: Vec<&str> = [(r.packed, "packed"), (r.partial, "partial")]
+                .iter()
+                .filter_map(|(on, n)| on.then_some(*n))
+                .collect();
+            vec![
+                (i + 1).to_string(),
+                risk_text(r.level).to_owned(),
+                r.score.to_string(),
+                format_name(r.format).to_owned(),
+                size,
+                cell(&r.path),
+                top,
+                flags.join(", "),
+            ]
+        })
+        .collect();
+    d.table(
+        &[
+            "Rank",
+            "Risk",
+            "Score",
+            "Type",
+            "Size",
+            "File",
+            "Top finding",
+            "Flags",
+        ],
+        &table,
+    );
+    d.out
 }
 
 /// Failed and skipped files.
@@ -1565,6 +1701,68 @@ mod tests {
             );
             assert!(check_tables(&md) >= 3, "{md}");
         }
+    }
+
+    fn row(path: &str, level: RiskLevel, score: u32) -> crate::worker::Summary {
+        crate::worker::Summary {
+            path: path.into(),
+            format: rtriage_core::Format::Pe,
+            size: 48_128,
+            score,
+            level,
+            top_finding: Some(crate::worker::TopFinding {
+                id: "PE-SECTION-RWX".into(),
+                title: "Writable and executable section".into(),
+                severity: Severity::Medium,
+            }),
+            packed: false,
+            partial: false,
+            errors: 0,
+        }
+    }
+
+    fn scan_rows() -> Vec<crate::worker::Summary> {
+        let mut packed = row("dir/packed.exe", RiskLevel::Medium, 40);
+        packed.packed = true;
+        packed.partial = true;
+        let mut clean = row("dir/clean.bin", RiskLevel::CleanLooking, 0);
+        clean.top_finding = None;
+        clean.format = rtriage_core::Format::Unknown;
+        clean.size = 12;
+        vec![row("dir/a.exe", RiskLevel::High, 66), packed, clean]
+    }
+
+    #[test]
+    fn md_scan() {
+        insta::assert_snapshot!(render_scan_table(&scan_rows(), 1));
+    }
+
+    #[test]
+    fn scan_md_table_keeps_caller_order_with_ranks() {
+        let md = render_scan_table(&scan_rows(), 0);
+        let a = md.find("| 1 | HIGH | 66 |").unwrap();
+        let p = md.find("| 2 | MEDIUM | 40 |").unwrap();
+        let c = md.find("| 3 | CLEAN-LOOKING | 0 |").unwrap();
+        assert!(a < p && p < c, "{md}");
+        assert!(
+            md.contains("3 file(s): 1 high, 1 medium, 0 low, 1 clean-looking."),
+            "{md}"
+        );
+        assert!(render_scan_table(&[], 0).contains("_No files analyzed._"));
+    }
+
+    #[test]
+    fn scan_md_hostile_file_names_keep_rows() {
+        let mut rows = scan_rows();
+        for r in &mut rows {
+            r.path = HOSTILE.into();
+            if let Some(t) = r.top_finding.as_mut() {
+                t.title = HOSTILE.into();
+            }
+        }
+        let md = render_scan_table(&rows, 2);
+        check_safe(&md);
+        assert_eq!(check_tables(&md), 1, "{md}");
     }
 
     #[test]
