@@ -256,6 +256,22 @@ does:
   The 1.3× threshold is *Claude's call*. A faster allocator for musl would
   be a new dependency, so it is not part of this design. The numbers go in
   the plan's notes and the release notes.
+
+  **Result and exception (user, 2026-11-27): musl ships.** Measured with
+  `musl-bench.yml` on one `ubuntu-latest` runner, median of 7 runs:
+
+  | Target | One file (YARA compile) | `scan` of 240 files |
+  |---|---|---|
+  | gnu | 10 ms | 59 ms |
+  | musl | 16 ms | 75 ms |
+  | musl / gnu | 1.6× | 1.27× |
+
+  The one-file case misses the 1.3× rule, but the gap is 6 ms per run, so at
+  that size process start-up sets the ratio rather than real work. The batch
+  case, which reflects real use, is within the threshold. A static binary
+  that runs on any Linux distribution is worth more than 6 ms, so the user
+  made an exception to the rule. Re-run `musl-bench.yml` if the YARA rules
+  or the allocator story change much.
 - **`release.yml`**, triggered on `push` of tags `v*`:
   1. **check:** the tag without `v` must equal the workspace version in
      `Cargo.toml`. Fail otherwise. So `v0.1.0-rc.1` requires

@@ -47,6 +47,8 @@ First public pre-release.
 
 - The JSON schema is version 1; from this release on, a shape change bumps
   it.
+- The Linux binary is static (musl) and runs on any x86_64 distribution;
+  it is slightly slower to start than a glibc build (about 6 ms).
 - Release binaries are not code-signed; verify them with `SHA256SUMS` and
   `gh attestation verify` (see the README).
 - rtriage never executes, loads or emulates the files it analyzes.
