@@ -1,0 +1,38 @@
+# cargo-deny: licenses, advisories, bans and sources for the whole
+# dependency tree (all features, so YARA and the TUI are covered).
+# Run locally with `cargo deny check`; CI runs it on every push and weekly.
+
+[graph]
+all-features = true
+
+[advisories]
+# Vulnerabilities always fail. Unmaintained crates fail only when we depend
+# on them directly; deep transitive ones are reported but do not block.
+unmaintained = "workspace"
+yanked = "deny"
+
+[licenses]
+# rtriage binaries are distributed under GPL-3.0-or-later, so every
+# dependency must be compatible with it. Each entry below is, and is used
+# by the current tree; add a license only when a dependency needs it.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Zlib",
+    "Unicode-3.0",
+    "GPL-3.0-or-later",
+]
+confidence-threshold = 0.9
+
+[bans]
+wildcards = "deny"
+# Path dependencies inside the workspace carry no version; they are fine.
+allow-wildcard-paths = true
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

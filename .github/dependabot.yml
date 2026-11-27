@@ -1,0 +1,15 @@
+# Weekly dependency updates. Actions stay pinned to commit SHAs; Dependabot
+# updates the SHA and the version comment together.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      patch:
+        update-types: [patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
