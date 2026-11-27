@@ -9,7 +9,7 @@ change the CLI).
 
 ## [0.1.0] - 2026-11-27
 
-First public pre-release.
+First public release.
 
 ### Added
 

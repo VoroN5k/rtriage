@@ -29,7 +29,10 @@ does:
   - macOS x86_64, cross-built on the Apple Silicon runner.
 - **Dry run:** `v0.1.0-rc.1` is a draft in the still-private repository.
   The real `v0.1.0` is published as a **pre-release**, and
-  `schema_version = 1` is frozen at that point.
+  `schema_version = 1` is frozen at that point. *Update (user, after
+  publishing): v0.1.0 was re-marked as a normal release; from then on only
+  tags with a suffix (`-rc.N`) are pre-releases. 0.x versioning already
+  says the CLI may change.*
 - **Supply chain:** `cargo-deny` (licenses compatible with
   GPL-3.0-or-later, advisories, bans, sources) runs in CI and on a
   schedule; Dependabot covers cargo and GitHub Actions.

@@ -16,9 +16,10 @@ input is treated as hostile: parsers are bounded and panic-free, output is
 sanitized against terminal escape injection, and batch runs analyse each
 file in an isolated worker process.
 
-> **Status: pre-release, v0.1.0.** Milestones 1–6 are done (core, PE, ELF + IOCs,
-> YARA + batch mode, TUI, Markdown output). Expect the CLI to change before
-> 1.0; the JSON schema follows the versioning rules in
+> **Status: v0.1.0, the first public release.** Milestones 1–6 are done
+> (core, PE, ELF + IOCs, YARA + batch mode, TUI, Markdown output). Before 1.0
+> the CLI may still change between minor versions; the JSON schema follows the
+> versioning rules in
 > [`docs/output-schema.md`](docs/output-schema.md).
 
 ## Screenshots
