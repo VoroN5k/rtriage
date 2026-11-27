@@ -1,0 +1,147 @@
+name: Release
+
+# On a `v*` tag: check the tag against the workspace version, build every
+# target with --locked, smoke-test each binary on synthetic samples, then
+# (only if every build passed) write SHA256SUMS, attest provenance (public
+# repository only) and create a DRAFT pre-release. Nothing is published
+# automatically: review the draft and publish it by hand.
+#
+# workflow_dispatch builds and smoke-tests without releasing; `break_smoke`
+# makes the Linux smoke test fail on purpose, to prove that a failing
+# target blocks the release.
+#
+# No cargo cache here on purpose: release binaries are built from scratch,
+# never from a cache other workflows can write.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      break_smoke:
+        description: "Test switch: make the Linux smoke test fail"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: tag matches version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: github.ref_type == 'tag'
+        run: bash scripts/check-version.sh "$GITHUB_REF_NAME"
+
+  build:
+    name: build (${{ matrix.target }})
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, ext: tar.gz }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest, ext: zip }
+          - { target: aarch64-apple-darwin, os: macos-latest, ext: tar.gz }
+          # Cross-built on the Apple Silicon runner; smoke-tested under Rosetta when available.
+          - { target: x86_64-apple-darwin, os: macos-latest, ext: tar.gz }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install && rustup target add "$TARGET"
+      - if: endsWith(matrix.target, '-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build
+        run: cargo build --release --locked -p rtriage-cli --features yara --target "$TARGET"
+      - name: Synthetic samples
+        run: cargo run --locked -p rtriage-fixtures --example samples -- samples
+      - name: Smoke test
+        env:
+          SMOKE_BREAK: ${{ inputs.break_smoke && endsWith(matrix.target, '-linux-musl') && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          bin="target/$TARGET/release/rtriage"
+          [ "$RUNNER_OS" = Windows ] && bin="$bin.exe"
+          version=$(cargo metadata --locked --no-deps --format-version 1 |
+            jq -r '.packages[] | select(.name == "rtriage-cli") | .version')
+          mkdir -p dist
+          if [ "$TARGET" = x86_64-apple-darwin ] && ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+            file "$bin" | grep -q 'x86_64' || { echo "not an x86_64 binary"; exit 1; }
+            echo "Rosetta unavailable: $TARGET built and checked, not smoke-tested"
+            touch "dist/skip-smoke-$TARGET"
+          else
+            bash scripts/smoke.sh "$bin" samples "$version"
+          fi
+      - name: Package
+        run: |
+          set -euo pipefail
+          name="rtriage-${GITHUB_REF_NAME}-$TARGET"
+          [ "$GITHUB_REF_TYPE" = tag ] || name="rtriage-dev-$TARGET"
+          exe=rtriage
+          [ "$RUNNER_OS" = Windows ] && exe=rtriage.exe
+          mkdir -p stage dist
+          cp "target/$TARGET/release/$exe" LICENSE README.md stage/
+          if [ "${{ matrix.ext }}" = zip ]; then
+            (cd stage && 7z a -tzip "../dist/$name.zip" "$exe" LICENSE README.md)
+          else
+            tar -czf "dist/$name.tar.gz" -C stage "$exe" LICENSE README.md
+          fi
+          ls -l dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    name: draft release
+    needs: [check, build]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum rtriage-* > SHA256SUMS
+          cat SHA256SUMS
+      - if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/rtriage-*
+      - name: Draft pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ATTESTED: ${{ !github.event.repository.private }}
+        run: |
+          set -euo pipefail
+          skipped=$(cd dist && ls skip-smoke-* 2>/dev/null | sed 's/^skip-smoke-//' | paste -sd, - || true)
+          SKIP_SMOKE="$skipped" bash scripts/release-notes.sh "${GITHUB_REF_NAME#v}" > notes.md
+          gh release create "$GITHUB_REF_NAME" --draft --prerelease \
+            --title "rtriage $GITHUB_REF_NAME" --notes-file notes.md \
+            dist/rtriage-* dist/SHA256SUMS

@@ -1,0 +1,61 @@
+name: musl benchmark
+
+# Decides the Linux release target: a static musl binary runs on any
+# distribution, but musl's allocator can be slow. Builds gnu and musl
+# release binaries on the same runner and prints the median of several runs
+# of (a) one small file, dominated by compiling the bundled YARA rules, and
+# (b) `scan` over a few hundred synthetic samples. musl ships if both
+# medians are within 1.3x of gnu. Manual only.
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "Runs per measurement (median is reported)"
+        default: "7"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bench:
+    name: gnu vs musl
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install && rustup target add x86_64-unknown-linux-musl
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build gnu and musl
+        run: |
+          for t in x86_64-unknown-linux-gnu x86_64-unknown-linux-musl; do
+            cargo build --release --locked -p rtriage-cli --features yara --target "$t"
+          done
+      - name: Synthetic samples
+        run: cargo run --locked -p rtriage-fixtures --example samples -- samples 40
+      - name: Measure
+        env:
+          RUNS: ${{ inputs.runs }}
+        run: |
+          set -euo pipefail
+          median() { sort -n | awk '{a[NR]=$1} END {print a[int((NR+1)/2)]}'; }
+          measure() { # prints the median wall time in milliseconds
+            for _ in $(seq "$RUNS"); do
+              start=$(date +%s%N)
+              "$@" >/dev/null 2>&1 || true
+              echo $(( ($(date +%s%N) - start) / 1000000 ))
+            done | median
+          }
+          {
+            echo "| target | one file (ms) | scan of $(ls samples | wc -l) files (ms) |"
+            echo "|---|---|---|"
+            for t in x86_64-unknown-linux-gnu x86_64-unknown-linux-musl; do
+              bin=target/$t/release/rtriage
+              one=$(measure "$bin" -f json samples/pe-clean.exe)
+              scan=$(measure "$bin" scan samples -j 4 -f json)
+              echo "| $t | $one | $scan |"
+            done
+          } | tee -a "$GITHUB_STEP_SUMMARY"
