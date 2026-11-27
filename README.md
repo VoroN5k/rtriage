@@ -1,6 +1,10 @@
-# rtriage
+<p align="center"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/rtriage-logo-dark.svg">
+  <img alt="rtriage" src="assets/brand/rtriage-logo-light.svg" width="420">
+</picture></p>
 
-Fast, static malware triage for PE and ELF binaries.
+<p align="center"><b>Static triage for PE and ELF binaries</b><br>
+English · <a href="README.uk.md">Українська</a></p>
 
 Given files or directories, `rtriage` answers in seconds: *what is this file,
 does it look suspicious, and why?* Every finding carries the concrete
@@ -12,9 +16,92 @@ input is treated as hostile: parsers are bounded and panic-free, output is
 sanitized against terminal escape injection, and batch runs analyse each
 file in an isolated worker process.
 
-> Status: milestones 1–5 done (core, PE, ELF + IOCs, YARA + batch mode,
-> TUI). Next: polish (M6). Pre-release: the JSON schema is version 1 and may
-> still change before the first release (see `docs/output-schema.md`).
+> **Status: pre-release.** Milestones 1–6 are done (core, PE, ELF + IOCs,
+> YARA + batch mode, TUI, Markdown output). Expect the CLI to change before
+> 1.0; the JSON schema follows the versioning rules in
+> [`docs/output-schema.md`](docs/output-schema.md).
+
+## Screenshots
+
+All screenshots use the synthetic files from `samples/` (see
+[Development](#development)); no real malware.
+
+| Report | Score breakdown (`--explain`) |
+|---|---|
+| ![Text report of a high-risk synthetic PE](docs/images/report.png) | ![Score breakdown of a UPX-packed synthetic PE](docs/images/explain.png) |
+| **Batch table (`scan`)** | **Interactive view (`tui`)** |
+| ![scan table sorted by risk](docs/images/scan.png) | ![TUI findings tab with evidence](docs/images/tui.png) |
+
+## Install
+
+### Prebuilt binaries
+
+[GitHub Releases](https://github.com/VoroN5k/rtriage/releases) have
+archives for Linux x86_64, Windows x86_64, macOS Apple Silicon and macOS
+Intel, built with YARA and the TUI. Each archive holds the `rtriage` binary,
+`LICENSE` and this README.
+
+Verify what you downloaded before running it:
+
+```bash
+# Linux / macOS: checksums (SHA256SUMS is attached to the release)
+sha256sum -c SHA256SUMS --ignore-missing        # macOS: shasum -a 256 -c SHA256SUMS --ignore-missing
+
+# Windows (PowerShell): compare with the line in SHA256SUMS
+Get-FileHash -Algorithm SHA256 .\rtriage-v0.1.0-x86_64-pc-windows-msvc.zip
+
+# Provenance: the archive was built by this repository's release workflow
+gh attestation verify rtriage-v0.1.0-<target>.tar.gz --repo VoroN5k/rtriage
+```
+
+**The binaries are not code-signed.** Signing certificates cost money and
+tie the project to a vendor; instead every release has checksums and a
+build provenance attestation you can check yourself. Windows SmartScreen
+and macOS Gatekeeper will warn about an unknown publisher. Once you have
+verified an archive, allowing it (on macOS, for example
+`xattr -d com.apple.quarantine rtriage`) is your decision.
+
+### From source
+
+```bash
+cargo install --git https://github.com/VoroN5k/rtriage --locked --features yara rtriage-cli
+```
+
+Needs Rust 1.95 or newer (see [Building](#building)). Leave out
+`--features yara` for a smaller build without YARA.
+
+## Security model
+
+- **Static only.** Input files are read, never executed, loaded or
+  emulated.
+- **Hostile input by default.** Parsers are bounded by configurable limits
+  (file size, counts, string lengths, time per file), never panic on
+  malformed data, and are fuzzed and property-tested.
+- **Safe output.** Control characters, escape sequences, bidi and invisible
+  characters from the file are escaped in the terminal; in Markdown every
+  file value is a code span, so nothing becomes a link, image or HTML.
+- **Isolation.** Batch runs analyse each file in a separate worker process;
+  a crash, hang or flood loses only that file.
+- **No network, no telemetry.** rtriage makes no network connections.
+
+How to report a vulnerability: [`SECURITY.md`](SECURITY.md).
+
+## Limitations
+
+- **No unpacking.** rtriage is static: a packed file shows the packer and
+  its traces, not the payload inside.
+- **Heuristics, not verdicts.** Findings can be false positives, and the
+  risk score ranks files for a closer look; it does not say a file is
+  malware or safe.
+- **Signatures are not validated.** Authenticode is reported as present
+  ("signed (unverified)"), not checked.
+- **Formats:** PE and ELF only. No Mach-O, .NET IL, scripts or Office
+  documents.
+- **YARA** runs only in builds with the `yara` feature (release binaries
+  have it).
+- **Pre-1.0.** The CLI may change between releases; the JSON schema is
+  versioned (`schema_version`).
+- **Unsigned binaries** (see [Install](#install)).
 
 ## What it looks at
 
@@ -48,7 +135,8 @@ cargo build --release -p rtriage-cli --no-default-features  # neither: plain CLI
 
 (Windows x86_64; crates counted with `cargo tree -e normal`.)
 
-**MSRV:** Rust 1.95 (pinned in `rust-toolchain.toml`). The `test-hooks`
+**MSRV:** Rust 1.95 or newer (`rust-version` in `Cargo.toml`; the
+development toolchain is pinned in `rust-toolchain.toml`). The `test-hooks`
 feature exists only for the worker-isolation tests; never enable it in a
 build you ship.
 
@@ -108,8 +196,9 @@ skipped files. `scan -f md` writes the risk table first and, with
   characters, so documents stop at 60 000 by default (`--md-limit N`,
   `0` = no limit). The cut is on a line boundary (tables keep whole rows)
   and a note says how many lines and characters were left out; failed and
-  skipped files are always listed. Truncation never changes the exit code
-  or `--fail-on`.
+  skipped files are listed in a reserved part at the end (only a very long
+  list is itself cut, with its own note). Truncation never changes the exit
+  code or `--fail-on`.
 - `--no-defang` and `--md-limit` with another format are usage errors
   (exit 2).
 - `scan --full -f md` holds reports until the table is written, but only
@@ -203,6 +292,14 @@ cargo insta review                        # after an intended change to a screen
 ```
 
 TUI screens are snapshot-tested at 80×24 and larger with `insta`.
+
+Synthetic sample files (benign, generated from the test fixtures) for
+trying rtriage out or for screenshots:
+
+```bash
+cargo run -p rtriage-fixtures --example samples --locked -- samples
+rtriage scan samples/
+```
 
 Tests use synthetic, programmatically built fixtures only; no real malware
 is, or will be, part of this repository.
