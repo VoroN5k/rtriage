@@ -5,7 +5,7 @@ members = ["crates/rtriage-core", "crates/rtriage-cli", "crates/rtriage-fixtures
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.0-rc.1"
 edition = "2021"
 rust-version = "1.95"
 publish = false
