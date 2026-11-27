@@ -5,9 +5,11 @@
 //! - **scan** (`rtriage scan`): a compact table sorted by risk; JSON is
 //!   NDJSON ending in one `summary` line. Only compact rows are kept in
 //!   memory; full reports (`--full`) are streamed out as they finish,
-//!   except in Markdown, where they follow the table and are held up to the
-//!   document limit (all of them with `--md-limit 0`).
+//!   except in Markdown, where they follow the table in its order and only
+//!   the top-ranked ones the document limit can show are held (all of them
+//!   with `--md-limit 0`).
 
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::File;
@@ -25,7 +27,7 @@ use crate::output::{json, text, Failure, SkippedPath};
 use crate::pool::{self, Outcome, PoolOptions, GRACE};
 use crate::worker::{Spawn, Summary, DEFAULT_MAX_RESPONSE_LINE};
 use crate::{report_failure, Gate};
-use rtriage_core::Config;
+use rtriage_core::{Config, RiskLevel};
 
 /// Time a new worker may take to send `ready`.
 const START_TIMEOUT: Duration = Duration::from_secs(30);
@@ -133,13 +135,18 @@ pub fn scan(
     // Markdown puts the table first, so `--full` bodies wait (bounded by
     // the document limit; see HeldBodies).
     let md = cli.format == OutputFormat::Md;
-    let mut held = HeldBodies::new(cli.md_limit());
+    let mut held: HeldBodies<HeldKey> = HeldBodies::new(cli.md_limit());
     let result = pool::run(files, &opts, |o| {
         match o {
-            Outcome::Report { summary, body, .. } => {
+            Outcome::Report {
+                index,
+                summary,
+                body,
+            } => {
                 if args.full {
                     if md {
-                        held.push(body);
+                        let (level, score, path) = rank(&summary);
+                        held.push((level, score, path.to_owned(), index), body);
                     } else if json {
                         json::ndjson_report(&mut out, &body)?;
                     } else {
@@ -194,13 +201,16 @@ pub fn scan(
 /// raise it above what the score gives; without floors this equals sorting
 /// by score.
 pub fn sort_rows(rows: &mut [Summary]) {
-    rows.sort_by(|a, b| {
-        b.level
-            .cmp(&a.level)
-            .then_with(|| b.score.cmp(&a.score))
-            .then_with(|| a.path.cmp(&b.path))
-    });
+    rows.sort_by(|a, b| rank(a).cmp(&rank(b)));
 }
+
+/// The table order as a key: smaller sorts first.
+fn rank(s: &Summary) -> (Reverse<RiskLevel>, Reverse<u32>, &str) {
+    (Reverse(s.level), Reverse(s.score), s.path.as_str())
+}
+
+/// [`rank`] owned, plus the input index so equal rows stay distinct.
+type HeldKey = (Reverse<RiskLevel>, Reverse<u32>, String, usize);
 
 /// stdout (through [`AutoStream`], which strips styles for non-terminals) or
 /// the `-o` file (never styled). The flag says whether styles may be emitted.

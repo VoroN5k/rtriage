@@ -786,3 +786,39 @@ fn scan_md_truncated_counts_omitted_lines() {
     );
     assert_valid_md(&cut);
 }
+
+#[test]
+fn scan_md_full_keeps_the_riskiest_reports_and_is_deterministic() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("md-scan-rank");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 0..4 {
+        let f = many_strings(&format!("md-scan-rank-{i}.bin"));
+        std::fs::copy(&f, dir.join(format!("{i}.bin"))).unwrap();
+    }
+    let inject = std::fs::read(injection_pe("md-scan-rank-inject.exe")).unwrap();
+    std::fs::write(dir.join("z-inject.exe"), inject).unwrap();
+    let d = dir.to_str().unwrap();
+    let run = |jobs: &str| {
+        stdout(&raw(&[
+            "scan",
+            "--full",
+            "-f",
+            "md",
+            "--all-strings",
+            "--md-limit",
+            "9000",
+            "-j",
+            jobs,
+            d,
+        ]))
+    };
+    let one = run("1");
+    // The medium-risk file ranks first: its report is the one shown, first.
+    let body = one.find("### Findings").unwrap();
+    let heading = one[..body].rfind("\n## `").unwrap();
+    assert!(one[heading..body].contains("z-inject.exe"), "{one}");
+    for jobs in ["2", "4"] {
+        assert_eq!(run(jobs), one, "-j {jobs}");
+    }
+}

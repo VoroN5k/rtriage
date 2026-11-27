@@ -120,12 +120,12 @@ impl<W: Write> Document<W> {
         self.report(&render_scan_table(rows, failed))
     }
 
-    /// Adds the bodies of `held`, then counts the ones it dropped.
+    /// Adds the bodies of `held` in rank order, then counts the ones it dropped.
     ///
     /// # Errors
     /// Errors of the inner writer.
-    pub fn held(&mut self, held: HeldBodies) -> io::Result<()> {
-        for body in &held.bodies {
+    pub fn held<K: Ord>(&mut self, held: HeldBodies<K>) -> io::Result<()> {
+        for body in held.bodies.values() {
             self.report(body)?;
         }
         self.budget.skip(held.dropped_lines, held.dropped_chars);
@@ -152,32 +152,54 @@ impl<W: Write> Document<W> {
 }
 
 /// Report bodies kept for `scan --full -f md`, whose table comes first:
-/// only as many as the document can show. Once the body allowance is used
-/// (the body that crosses it is still kept, so the budget is sure to cut),
-/// later bodies are only counted for the truncation note.
-#[derive(Debug, Default)]
-pub struct HeldBodies {
+/// only the top-ranked ones the document can show, in rank order (`K`
+/// sorts like the table, best first). The kept set is the shortest rank
+/// prefix that crosses the body allowance (the crossing body is kept so the
+/// budget is sure to cut); every other body is only counted for the
+/// truncation note. The result does not depend on the order bodies arrive
+/// in, and memory stays at the allowance plus one body.
+#[derive(Debug)]
+pub struct HeldBodies<K: Ord> {
     cap: Option<usize>,
     used: usize,
-    full: bool,
-    bodies: Vec<String>,
+    bodies: BTreeMap<K, String>,
     dropped_lines: u64,
     dropped_chars: u64,
 }
 
-impl HeldBodies {
+/// Characters a body takes in the document, separator included.
+fn held_chars(body: &str) -> usize {
+    body.chars().count().saturating_add(SEPARATOR.len())
+}
+
+impl<K: Ord> HeldBodies<K> {
     /// Holds bodies for a document limited to `limit` characters.
     pub fn new(limit: Option<usize>) -> Self {
         HeldBodies {
             cap: limit.map(|l| l.saturating_sub(TAIL_RESERVE)),
-            ..HeldBodies::default()
+            used: 0,
+            bodies: BTreeMap::new(),
+            dropped_lines: 0,
+            dropped_chars: 0,
         }
     }
 
-    /// Keeps or counts one body.
-    pub fn push(&mut self, body: String) {
-        let chars = body.chars().count().saturating_add(SEPARATOR.len());
-        if self.full {
+    /// Adds one body ranked by `key`, then lets go of the lowest-ranked
+    /// bodies the document cannot reach.
+    pub fn push(&mut self, key: K, body: String) {
+        self.used = self.used.saturating_add(held_chars(&body));
+        self.bodies.insert(key, body);
+        let Some(cap) = self.cap else {
+            return;
+        };
+        // The lowest-ranked body is not needed when the others already cross the cap.
+        while let Some(entry) = self.bodies.last_entry() {
+            let chars = held_chars(entry.get());
+            if self.used.saturating_sub(chars) <= cap {
+                break;
+            }
+            let body = entry.remove();
+            self.used = self.used.saturating_sub(chars);
             let lines = body.matches('\n').count().saturating_add(2);
             self.dropped_lines = self
                 .dropped_lines
@@ -185,11 +207,7 @@ impl HeldBodies {
             self.dropped_chars = self
                 .dropped_chars
                 .saturating_add(u64::try_from(chars).unwrap_or(u64::MAX));
-            return;
         }
-        self.used = self.used.saturating_add(chars);
-        self.full = self.cap.is_some_and(|cap| self.used > cap);
-        self.bodies.push(body);
     }
 }
 
@@ -1730,6 +1748,31 @@ mod tests {
         clean.format = rtriage_core::Format::Unknown;
         clean.size = 12;
         vec![row("dir/a.exe", RiskLevel::High, 66), packed, clean]
+    }
+
+    #[test]
+    fn held_bodies_keep_the_top_ranked_whatever_the_arrival_order() {
+        // cap 25; every body is 10 chars + a 5-char separator = 15.
+        let body = |c: &str| c.repeat(5);
+        let (a, b, c) = (body("a\n"), body("b\n"), body("c\n"));
+        for order in [[1, 2, 3], [3, 2, 1], [2, 3, 1], [3, 1, 2]] {
+            let mut h = HeldBodies::new(Some(TAIL_RESERVE + 25));
+            for k in order {
+                let text = [&a, &b, &c][k - 1].clone();
+                h.push(k, text);
+            }
+            // Ranks 1 and 2 cross the cap (30 > 25); rank 3 is only counted.
+            let kept: Vec<&String> = h.bodies.values().collect();
+            assert_eq!(kept, [&a, &b], "{order:?}");
+            assert_eq!((h.dropped_lines, h.dropped_chars), (7, 15), "{order:?}");
+        }
+        // Without a limit everything is kept, in rank order.
+        let mut h = HeldBodies::new(None);
+        for k in [3, 1, 2] {
+            h.push(k, format!("{k}\n"));
+        }
+        let kept: Vec<&String> = h.bodies.values().collect();
+        assert_eq!(kept, ["1\n", "2\n", "3\n"]);
     }
 
     #[test]
