@@ -21,9 +21,10 @@ should read JSON.
 - Consumers should ignore unknown fields and treat unknown enum values
   gracefully; that is what keeps additions non-breaking.
 
-Current version: **1** (unreleased).
+Current version: **1**, released with rtriage v0.1.0 (2026-11-27). From that
+release on, the "after a release" rules above apply.
 
-Pre-release shape changes within version 1:
+Shape changes made before v0.1.0, within version 1:
 
 - `findings[].suppressed`: `{ by, packer }` became `{ kind, name, by }` (M3,
   when runtimes became explainers). `risk.breakdown[].reduced_by` for

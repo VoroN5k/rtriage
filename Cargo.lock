@@ -2324,7 +2324,7 @@ dependencies = [
 
 [[package]]
 name = "rtriage-cli"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "anstream",
  "anstyle",
@@ -2344,7 +2344,7 @@ dependencies = [
 
 [[package]]
 name = "rtriage-core"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "goblin",
  "md-5",
@@ -2362,18 +2362,18 @@ dependencies = [
 
 [[package]]
 name = "rtriage-fixtures"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "goblin",
 ]
 
 [[package]]
 name = "rtriage-sanitize"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 
 [[package]]
 name = "rtriage-tui"
-version = "0.1.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "criterion",
  "insta",
