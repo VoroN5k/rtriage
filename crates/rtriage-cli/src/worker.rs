@@ -374,6 +374,7 @@ fn render_body(cli: &Cli, report: &Report) -> String {
                 defang: cli.defang,
             },
         ),
+        OutputFormat::Md => output::markdown::render_report(report, crate::md_options(cli)),
         OutputFormat::Json if cli.worker_compact => {
             serde_json::to_string(report).unwrap_or_default()
         }

@@ -18,6 +18,7 @@ use anyhow::Context;
 use clap::ValueEnum;
 
 use crate::cli::{Cli, OutputFormat, ScanArgs};
+use crate::output::markdown::Document;
 use crate::output::{json, text, Failure, SkippedPath};
 use crate::pool::{self, Outcome, PoolOptions, GRACE};
 use crate::worker::{Spawn, Summary, DEFAULT_MAX_RESPONSE_LINE};
@@ -44,6 +45,12 @@ pub fn full_reports(
     if json {
         json::begin_document(&mut out)?;
     }
+    // Markdown goes through one document (and its budget) end to end.
+    let mut sink = if cli.format == OutputFormat::Md {
+        Sink::Md(Document::new(out, cli.md_limit())?)
+    } else {
+        Sink::Plain(out)
+    };
     let result = pool::run(files, &opts, |o| {
         match o {
             Outcome::Report {
@@ -62,26 +69,44 @@ pub fn full_reports(
             }
         }
         for body in order.ready() {
-            if json {
-                json::document_report(&mut out, &body, printed == 0)?;
-            } else {
-                if printed > 0 {
-                    text::write_separator(&mut out)?;
+            match &mut sink {
+                Sink::Md(doc) => doc.report(&body)?,
+                Sink::Plain(out) if json => {
+                    json::document_report(out, &body, printed == 0)?;
                 }
-                out.write_all(body.as_bytes())?;
+                Sink::Plain(out) => {
+                    if printed > 0 {
+                        text::write_separator(out)?;
+                    }
+                    out.write_all(body.as_bytes())?;
+                }
             }
             printed += 1;
         }
         Ok(())
     });
     result.context("batch analysis stopped")?;
-    if json {
-        json::end_document(&mut out, failures, skipped)?;
-    } else {
-        text::render_tail(failures, skipped, &mut out, color, printed > 0)?;
-    }
+    let mut out = match sink {
+        Sink::Md(doc) => doc.finish(failures, skipped)?,
+        Sink::Plain(mut out) => {
+            if json {
+                json::end_document(&mut out, failures, skipped)?;
+            } else {
+                text::render_tail(failures, skipped, &mut out, color, printed > 0)?;
+            }
+            out
+        }
+    };
     out.flush().context("cannot write report")?;
     Ok(gate)
+}
+
+/// Where full reports go.
+enum Sink {
+    /// Text or JSON, written directly.
+    Plain(Box<dyn Write>),
+    /// One Markdown document under a character budget.
+    Md(Document<Box<dyn Write>>),
 }
 
 /// The batch table (or NDJSON).
@@ -209,6 +234,7 @@ fn worker_spawn(
     push(match cli.format {
         OutputFormat::Text => "text",
         OutputFormat::Json => "json",
+        OutputFormat::Md => "md",
     });
     push("--strings-min");
     push(&cli.strings_min.to_string());
@@ -225,6 +251,7 @@ fn worker_spawn(
         (cli.all_strings, "--all-strings"),
         (cli.explain, "--explain"),
         (cli.defang, "--defang"),
+        (cli.no_defang, "--no-defang"),
         (color, "--worker-color"),
         (body == WorkerBody::Compact, "--worker-compact"),
         (body == WorkerBody::None, "--worker-summary-only"),

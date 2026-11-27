@@ -36,6 +36,10 @@ const EXIT_RISK: u8 = 3;
 fn main() -> ExitCode {
     // clap exits with code 2 on usage errors.
     let cli = Cli::parse();
+    if let Err(err) = cli.check_md_options() {
+        eprintln!("error: {err}");
+        return ExitCode::from(EXIT_USAGE);
+    }
     install_panic_hook();
     init_logging(&cli);
     let (mut config, plan) = match build_config(&cli) {
@@ -403,6 +407,17 @@ fn render(cli: &Cli, run: &Run, out: &mut dyn Write, color: bool) -> io::Result<
             },
         ),
         OutputFormat::Json => output::json::render(run, out),
+        OutputFormat::Md => output::markdown::render(run, out, md_options(cli), cli.md_limit()),
+    }
+}
+
+/// Markdown rendering options of this run (`--defang` changes nothing:
+/// Markdown is defanged unless `--no-defang`).
+pub(crate) fn md_options(cli: &Cli) -> output::markdown::MdOptions {
+    output::markdown::MdOptions {
+        explain: cli.explain,
+        all_strings: cli.all_strings,
+        defang: !cli.no_defang,
     }
 }
 

@@ -57,9 +57,21 @@ pub struct Cli {
     pub explain: bool,
 
     /// Defang URLs, domains, IPs and emails in text output (hxxp://, 1[.]2[.]3[.]4).
-    /// JSON always has both the raw value and `value_defanged`.
+    /// JSON always has both the raw value and `value_defanged`; Markdown is
+    /// always defanged (this flag changes nothing there, see --no-defang).
     #[arg(long, global = true)]
     pub defang: bool,
+
+    /// Markdown only: show URLs, domains, IPs and emails as found, not
+    /// defanged. A usage error with other formats.
+    #[arg(long, global = true)]
+    pub no_defang: bool,
+
+    /// Markdown only: document limit in characters [default: 60000; 0 = no
+    /// limit]. Output is cut on a line boundary with a note; failed and
+    /// skipped files are always listed. A usage error with other formats.
+    #[arg(long, value_name = "N", global = true)]
+    pub md_limit: Option<usize>,
 
     /// Exit with code 3 if any file's risk is at or above this level (for CI
     /// gates). Takes precedence over exit code 1 for failed files.
@@ -170,6 +182,9 @@ pub enum OutputFormat {
     Text,
     /// Versioned JSON (see docs/output-schema.md).
     Json,
+    /// Markdown for tickets, issues and wikis: every value from the file in
+    /// code spans, IOCs defanged.
+    Md,
 }
 
 /// Severity filter for displayed findings.
@@ -218,6 +233,34 @@ impl From<MinSeverity> for rtriage_core::Severity {
 }
 
 impl Cli {
+    /// Options that only make sense with `-f md`.
+    ///
+    /// # Errors
+    /// The first such option given with another format.
+    pub fn check_md_options(&self) -> Result<(), String> {
+        if self.format == OutputFormat::Md {
+            return Ok(());
+        }
+        for (given, flag) in [
+            (self.no_defang, "--no-defang"),
+            (self.md_limit.is_some(), "--md-limit"),
+        ] {
+            if given {
+                return Err(format!("{flag} only applies to Markdown output (-f md)"));
+            }
+        }
+        Ok(())
+    }
+
+    /// The Markdown document limit: `None` = unlimited.
+    pub fn md_limit(&self) -> Option<usize> {
+        match self.md_limit {
+            None => Some(crate::output::md::DEFAULT_LIMIT),
+            Some(0) => None,
+            Some(n) => Some(n),
+        }
+    }
+
     /// `true` unless `--no-color` or a non-empty `NO_COLOR` is set.
     pub fn color_allowed(&self) -> bool {
         !self.no_color && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())
@@ -340,6 +383,19 @@ mod tests {
                 .jobs,
             Some(64)
         );
+    }
+
+    #[test]
+    fn md_options() {
+        let cli = Cli::try_parse_from(["rtriage", "-f", "md", "a"]).unwrap();
+        assert_eq!(cli.format, OutputFormat::Md);
+        assert_eq!(cli.md_limit(), Some(crate::output::md::DEFAULT_LIMIT));
+        assert!(cli.check_md_options().is_ok());
+        let cli = Cli::try_parse_from(["rtriage", "-f", "md", "--md-limit", "0", "a"]).unwrap();
+        assert_eq!(cli.md_limit(), None);
+        let cli = Cli::try_parse_from(["rtriage", "--no-defang", "a"]).unwrap();
+        assert!(cli.check_md_options().unwrap_err().contains("--no-defang"));
+        assert!(Cli::try_parse_from(["rtriage", "--md-limit", "-1", "a"]).is_err());
     }
 
     #[test]

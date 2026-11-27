@@ -11,6 +11,8 @@ use std::io::{self, Write};
 
 use rtriage_sanitize::single_line;
 
+use super::common::group_digits;
+
 /// Longest value shown, in characters; the rest is summarized.
 pub const VALUE_LIMIT: usize = 200;
 
@@ -114,6 +116,8 @@ pub struct Budget<W: Write> {
     used: usize,
     held: Vec<u8>,
     in_tail: bool,
+    /// A blank line is owed before the next written line (after a note).
+    gap: bool,
     body: Dropped,
     tail: Dropped,
 }
@@ -128,12 +132,15 @@ impl<W: Write> Budget<W> {
             used: 0,
             held: Vec::new(),
             in_tail: false,
+            gap: false,
             body: Dropped::default(),
             tail: Dropped::default(),
         }
     }
 
     /// `true` once anything was dropped.
+    // Only tests ask today; the document itself carries the note.
+    #[allow(dead_code)]
     pub fn truncated(&self) -> bool {
         self.body.any() || self.tail.any()
     }
@@ -149,6 +156,8 @@ impl<W: Write> Budget<W> {
         self.flush_held()?;
         let body = self.body;
         self.note(body)?;
+        // A tail after the note starts its own block (written with its first line).
+        self.gap = body.any();
         self.in_tail = true;
         Ok(())
     }
@@ -189,6 +198,12 @@ impl<W: Write> Budget<W> {
         // document never has holes in the middle.
         if !dropped.any() && chars <= self.allowance() {
             self.used = self.used.saturating_add(chars);
+            if std::mem::take(&mut self.gap) {
+                self.inner.write_all(
+                    b"
+",
+                )?;
+            }
             return self.inner.write_all(bytes);
         }
         let dropped = if self.in_tail {
@@ -218,7 +233,8 @@ impl<W: Write> Budget<W> {
         // The note goes after a blank line, so it never joins a table.
         let text = format!(
             "\n> **truncated:** {} more lines ({} characters) not shown. Use -f json or --md-limit 0 for everything.\n",
-            d.lines, d.chars
+            group_digits(d.lines),
+            group_digits(d.chars)
         );
         // Notes are not counted: they are small (one line each, at most two
         // per document) and must never push the tail out.
@@ -442,6 +458,30 @@ mod tests {
         );
         let quote = Parser::new(&out).any(|e| matches!(e, Event::Start(Tag::BlockQuote(_))));
         assert!(quote, "the note is its own block quote");
+    }
+
+    #[test]
+    fn note_groups_digits_and_leaves_a_blank_line_before_the_tail() {
+        let body = "x
+"
+        .repeat(1_500);
+        let out = run(
+            Some(20),
+            15,
+            &body,
+            "## Failed
+",
+        );
+        assert!(out.contains("1 498 more lines (2 996 characters)"), "{out}");
+        assert!(
+            out.contains(
+                "for everything.
+
+## Failed
+"
+            ),
+            "{out}"
+        );
     }
 
     #[test]

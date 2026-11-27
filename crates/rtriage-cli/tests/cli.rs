@@ -1,5 +1,5 @@
 //! End-to-end tests of the `rtriage` binary: exit codes and failure handling.
-#![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+#![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -480,4 +480,203 @@ fn tui_without_a_terminal_exits_2_and_points_to_text_output() {
     assert!(stderr.contains("interactive terminal"), "{stderr}");
     assert!(stderr.contains("-f text"), "{stderr}");
     assert!(out.stdout.is_empty(), "nothing drawn: {:?}", out.stdout);
+}
+
+// ------------------------------------------------------------ Markdown
+
+/// Runs the binary without forcing a format.
+fn raw(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_rtriage"))
+        .args(args)
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap()
+}
+
+fn stdout(out: &Output) -> String {
+    String::from_utf8(out.stdout.clone()).unwrap()
+}
+
+/// A file with many classified strings: a long Markdown body.
+fn many_strings(name: &str) -> PathBuf {
+    let mut data = Vec::new();
+    for i in 0..1000 {
+        data.extend(format!("\0http://host{i}.example.com/path/{i}\0").bytes());
+    }
+    scratch(name, &data)
+}
+
+/// Every table row has as many cells as its header; no links or HTML.
+fn assert_valid_md(md: &str) {
+    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+    let (mut header, mut cells) = (None, 0);
+    for ev in Parser::new_ext(md, Options::ENABLE_TABLES) {
+        match ev {
+            Event::Start(Tag::Link { .. } | Tag::Image { .. })
+            | Event::Html(_)
+            | Event::InlineHtml(_) => panic!("unsafe event {ev:?}\n{md}"),
+            Event::Start(Tag::Table(_)) => header = None,
+            Event::Start(Tag::TableHead | Tag::TableRow) => cells = 0,
+            Event::Start(Tag::TableCell) => cells += 1,
+            Event::End(TagEnd::TableHead) => header = Some(cells),
+            Event::End(TagEnd::TableRow) => assert_eq!(Some(cells), header, "{md}"),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn md_single_file() {
+    let f = scratch("md-one.bin", b"\0\0beacon to http://c2.evil.top/gate\0\0");
+    let out = raw(&["-f", "md", f.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0));
+    let md = stdout(&out);
+    assert!(md.starts_with("# rtriage report\n\n## `"), "{md}");
+    assert!(md.contains("md-one.bin"), "{md}");
+    assert!(
+        md.contains("### Findings") && md.contains("### Strings"),
+        "{md}"
+    );
+    assert_valid_md(&md);
+}
+
+#[test]
+fn md_multi_file_one_document_in_input_order() {
+    let a = scratch("md-multi-a.bin", b"plain text a, nothing to see");
+    let b = upx_pe("md-multi-b.exe");
+    let out = raw(&["-f", "md", b.to_str().unwrap(), a.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(0));
+    let md = stdout(&out);
+    assert_eq!(md.matches("# rtriage report").count(), 1, "{md}");
+    let (pb, pa) = (
+        md.find("md-multi-b.exe").unwrap(),
+        md.find("md-multi-a.bin").unwrap(),
+    );
+    assert!(pb < pa, "input order\n{md}");
+    assert!(md.contains("\n---\n"), "{md}");
+    assert_valid_md(&md);
+}
+
+#[test]
+fn md_all_files_failed_is_a_valid_document() {
+    let out = raw(&["-f", "md", "md-missing-1.bin", "md-missing-2.bin"]);
+    assert_eq!(out.status.code(), Some(1));
+    let md = stdout(&out);
+    assert!(md.starts_with("# rtriage report\n\n"), "{md}");
+    assert!(md.contains("## Failed"), "{md}");
+    assert!(
+        md.contains("`md-missing-1.bin`") && md.contains("`md-missing-2.bin`"),
+        "{md}"
+    );
+    assert_valid_md(&md);
+}
+
+#[test]
+fn no_defang_and_md_limit_need_md() {
+    let f = scratch("md-flags.bin", b"plain text, nothing to see");
+    let f = f.to_str().unwrap();
+    for args in [
+        vec!["--no-defang", f],
+        vec!["--md-limit", "10", f],
+        vec!["-f", "json", "--md-limit", "0", f],
+        vec!["scan", "-f", "text", "--no-defang", f],
+    ] {
+        let out = raw(&args);
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("-f md"), "{args:?}: {err}");
+    }
+    assert_eq!(
+        raw(&["-f", "md", "--no-defang", "--md-limit", "0", f])
+            .status
+            .code(),
+        Some(0)
+    );
+}
+
+#[test]
+fn defang_flag_is_a_no_op_in_md() {
+    let f = scratch(
+        "md-defang.bin",
+        b"\0\0beacon to http://c2.evil.top/gate 45.13.227.8\0\0",
+    );
+    let other = scratch("md-defang-2.bin", b"plain text, nothing to see");
+    let (f, other) = (f.to_str().unwrap(), other.to_str().unwrap());
+    // In process (one file) and through workers (two files).
+    for files in [vec![f], vec![f, other]] {
+        let run = |flags: &[&str]| {
+            let mut args = vec!["-f", "md"];
+            args.extend_from_slice(flags);
+            args.extend_from_slice(&files);
+            stdout(&raw(&args))
+        };
+        let plain = run(&[]);
+        assert!(plain.contains("hxxp://c2[.]evil[.]top/gate"), "{plain}");
+        assert!(plain.contains("45[.]13[.]227[.]8"), "{plain}");
+        assert!(!plain.contains("http://c2.evil.top"), "{plain}");
+        assert_eq!(run(&["--defang"]), plain);
+        let open = run(&["--no-defang"]);
+        assert!(open.contains("`http://c2.evil.top/gate`"), "{open}");
+    }
+}
+
+#[test]
+fn md_limit_truncates_with_note_and_keeps_tail() {
+    let big = many_strings("md-big.bin");
+    let big = big.to_str().unwrap();
+    for files in [vec![big], vec![big, "md-gone.bin"]] {
+        let mut args = vec!["-f", "md", "--all-strings", "--md-limit", "5000"];
+        args.extend_from_slice(&files);
+        let md = stdout(&raw(&args));
+        assert!(md.contains("\n\n> **truncated:** "), "{md}");
+        // Notes are not counted against the limit.
+        let body: usize = md
+            .lines()
+            .filter(|l| !l.starts_with("> **truncated:**"))
+            .map(|l| l.chars().count() + 1)
+            .sum();
+        assert!(body <= 5000, "{body}");
+        if files.len() == 2 {
+            assert!(
+                md.contains("## Failed") && md.contains("`md-gone.bin`"),
+                "{md}"
+            );
+        }
+        assert_valid_md(&md);
+    }
+    // The default limit applies without the flag.
+    let md = stdout(&raw(&["-f", "md", "--all-strings", big]));
+    assert!(md.contains("> **truncated:** "), "default limit");
+}
+
+#[test]
+fn md_limit_zero_is_unlimited() {
+    let big = many_strings("md-big-0.bin");
+    let md = stdout(&raw(&[
+        "-f",
+        "md",
+        "--all-strings",
+        "--md-limit",
+        "0",
+        big.to_str().unwrap(),
+    ]));
+    assert!(!md.contains("truncated"));
+    assert!(md.chars().count() > 60_000, "{}", md.chars().count());
+    assert!(md.contains("host999[.]example"), "last string present");
+}
+
+#[test]
+fn fail_on_ignores_truncation() {
+    let pe = injection_pe("md-gate.exe");
+    let out = raw(&[
+        "-f",
+        "md",
+        "--md-limit",
+        "500",
+        "--fail-on",
+        "low",
+        pe.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(3));
+    assert!(stdout(&out).contains("truncated"));
 }

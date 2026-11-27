@@ -8,6 +8,7 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::io::{self, Write};
 
 use rtriage_core::analyzers::iocs::defang_text;
 use rtriage_core::report::{
@@ -20,7 +21,8 @@ use rtriage_core::{Evidence, Finding, PeFacts, PeHeaderFacts, Report, Risk, Risk
 use super::common::{
     enum_name, explainer_label, format_name, group_digits, human_size, short_size,
 };
-use super::md::{cell, code, code_limited, DETAIL_LIMIT, VALUE_LIMIT};
+use super::md::{cell, code, code_limited, Budget, DETAIL_LIMIT, TAIL_RESERVE, VALUE_LIMIT};
+use super::{Failure, Run, SkippedPath};
 
 /// Classified strings and IOCs shown per kind before "+N more" (as text).
 const PER_KIND: usize = 20;
@@ -44,6 +46,129 @@ pub struct MdOptions {
     pub all_strings: bool,
     /// Defang URLs, domains, IPs and emails in IOCs, evidence and strings.
     pub defang: bool,
+}
+
+/// Skipped paths listed before "+N more" (as text).
+const SKIPPED_SHOWN: usize = 20;
+
+/// Writes `run` as one Markdown document within `limit` characters
+/// (`None` = no limit).
+///
+/// # Errors
+/// Errors of `out`.
+pub fn render(
+    run: &Run,
+    out: &mut dyn Write,
+    opts: MdOptions,
+    limit: Option<usize>,
+) -> io::Result<()> {
+    let mut doc = Document::new(out, limit)?;
+    for r in &run.reports {
+        doc.report(&render_report(r, opts))?;
+    }
+    doc.finish(&run.failures, &run.skipped)?;
+    Ok(())
+}
+
+/// A Markdown document written as reports arrive: the title, report bodies
+/// separated by rules, then the tail (failed and skipped files), all under
+/// one [`Budget`] that keeps room for the tail.
+pub struct Document<W: Write> {
+    budget: Budget<W>,
+    reports: usize,
+}
+
+impl<W: Write> Document<W> {
+    /// Starts the document (writes the title).
+    ///
+    /// # Errors
+    /// Errors of `inner`.
+    pub fn new(inner: W, limit: Option<usize>) -> io::Result<Self> {
+        let mut budget = Budget::new(inner, limit, TAIL_RESERVE);
+        budget.write_all(
+            b"# rtriage report
+
+",
+        )?;
+        Ok(Document { budget, reports: 0 })
+    }
+
+    /// Adds one body from [`render_report`].
+    ///
+    /// # Errors
+    /// Errors of the inner writer.
+    pub fn report(&mut self, body: &str) -> io::Result<()> {
+        if self.reports > 0 {
+            self.budget.write_all(
+                b"---
+
+",
+            )?;
+        }
+        self.reports += 1;
+        self.budget.write_all(body.as_bytes())
+    }
+
+    /// Writes the tail and the truncation notes; returns the inner writer.
+    ///
+    /// # Errors
+    /// Errors of the inner writer.
+    pub fn finish(mut self, failures: &[Failure], skipped: &[SkippedPath]) -> io::Result<W> {
+        if self.reports == 0 && failures.is_empty() {
+            self.budget.write_all(
+                b"_No files analyzed._
+
+",
+            )?;
+        }
+        self.budget.begin_tail()?;
+        self.budget
+            .write_all(render_tail(failures, skipped).as_bytes())?;
+        self.budget.finish()
+    }
+}
+
+/// Failed and skipped files.
+fn render_tail(failures: &[Failure], skipped: &[SkippedPath]) -> String {
+    let mut d = Doc {
+        out: String::new(),
+        defang: false,
+    };
+    if !failures.is_empty() {
+        d.para("## Failed");
+        let items: Vec<String> = failures
+            .iter()
+            .map(|f| {
+                format!(
+                    "{}: {} ({})",
+                    code(&f.path),
+                    code(&f.error),
+                    enum_name(&f.kind)
+                )
+            })
+            .collect();
+        d.list(&items);
+    }
+    if !skipped.is_empty() {
+        d.para("## Skipped");
+        d.para(&format!(
+            "{} (not analyzed, not failures).",
+            group_digits(skipped.len() as u64)
+        ));
+        let mut items: Vec<String> = skipped
+            .iter()
+            .take(SKIPPED_SHOWN)
+            .map(|s| format!("{} {}", enum_name(&s.reason), code(&s.path)))
+            .collect();
+        if skipped.len() > SKIPPED_SHOWN {
+            items.push(format!(
+                "+{} more (see JSON)",
+                skipped.len() - SKIPPED_SHOWN
+            ));
+        }
+        d.list(&items);
+    }
+    d.out
 }
 
 /// One report as a Markdown section headed `## `file``; the caller writes
